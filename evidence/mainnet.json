@@ -1,0 +1,31 @@
+{
+  "_note": "This file must contain only real on-chain data. NEVER fabricate tx hashes, addresses, block numbers, or timestamps. Populate after completing the mainnet deployment runbook in docs/DEPLOYMENT.md.",
+  "_status": "PLACEHOLDER — mainnet not yet deployed",
+  "chainId": null,
+  "chainName": null,
+  "rpc": "https://rpc.mainnet.arc.io",
+  "usdcErc20Address": "0x3600000000000000000000000000000000000000",
+  "usdcErc20Decimals": 6,
+  "usdcNativeGasDecimals": 18,
+  "contract": {
+    "name": "BudgetRail",
+    "address": null,
+    "deployTxHash": null,
+    "deployedAt": null,
+    "explorerUrl": null,
+    "explorerTxUrl": null,
+    "constructorArg_usdcAddress": "0x3600000000000000000000000000000000000000"
+  },
+  "mainnetLifecycle": {
+    "status": "PENDING_OPERATOR_APPROVAL",
+    "sessionId": null,
+    "createSessionTxHash": null,
+    "fundSessionTxHash": null,
+    "payment1TxHash": null,
+    "payment2TxHash": null,
+    "replayAttemptResult": null,
+    "closeSessionTxHash": null,
+    "finalOwnerBalanceDelta": null,
+    "finalProviderBalance": null
+  }
+}

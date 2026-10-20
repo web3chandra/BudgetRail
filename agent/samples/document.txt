@@ -1,0 +1,13 @@
+Programmable Payment Rails for Software Agents
+
+Software agents operating in production environments require deterministic, auditable, and cost-predictable access to external services. Traditional API billing models assume human oversight, monthly credit-card cycles, and manual invoice reconciliation. These assumptions break down when autonomous systems must transact at sub-second latency across organizational boundaries.
+
+BudgetRail introduces a session-based USDC payment vault designed specifically for agent-to-provider transactions. An operator creates a session bounded by an authorized agent wallet, a fixed provider payout address, and a maximum USDC budget. The agent may execute payments within those bounds, and the provider receives funds only after presenting a cryptographically signed invoice that the smart contract independently verifies.
+
+The design separates four distinct roles. Owner A controls the session budget and may terminate it at any time to recover unspent funds. Agent B is the only wallet authorized to submit payments — no other party may spend from the session. Provider C receives USDC transfers only when Agent B has presented a valid EIP-712 invoice from Quote Signer D. Signer D is a dedicated hot key that issues time-bounded invoices at a fixed price per call.
+
+Payments are fully onchain and final. The contract enforces replay protection through a requestId bitmap: each unique payment identifier may be settled exactly once. Session accounting maintains invariants totalSpent ≤ totalFunded ≤ maxBudget at all times. These invariants are enforced atomically within the EVM, eliminating the race conditions and reconciliation delays common in off-chain billing systems.
+
+The provider API independently verifies settlement before releasing results. It reads the transaction receipt, decodes the PaymentSettled event from the exact contract address, confirms the ERC-20 Transfer to its payout wallet, and checks that the block timestamp falls before the quote deadline. Only after all fourteen checks pass does the provider return the Document Insights payload.
+
+This architecture enables cost-transparent, operator-supervised agent spending: each payment requires an explicit signed invoice, the operator sees exactly what was spent and why, and the contract refunds unspent budget to the owner on close.

@@ -1,0 +1,35 @@
+{
+  "name": "@budgetrail/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for BudgetRail — programmatic USDC payment sessions on Arc",
+  "type": "module",
+  "main":    "./dist/index.js",
+  "types":   "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import":  "./dist/index.js",
+      "types":   "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./src": "./src/index.ts"
+  },
+  "scripts": {
+    "build":     "tsc --project tsconfig.json --outDir dist",
+    "test":      "bun test src/",
+    "typecheck": "tsc --noEmit"
+  },
+  "files": ["dist", "src", "README.md"],
+  "peerDependencies": {
+    "viem": ">=2.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  },
+  "keywords": ["budgetrail", "usdc", "arc", "agents", "payments", "web3"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url":  "https://github.com/web3chandra/BudgetRail"
+  },
+  "_note": "SDK exports compiled JS+declarations from dist/. Source TypeScript in src/ is for development. Run 'bun run build' before publishing. NOT YET PUBLISHED to npm."
+}

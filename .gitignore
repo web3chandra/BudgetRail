@@ -1,0 +1,35 @@
+# Environment files — contain secrets, NEVER commit
+.env
+.env.*
+*/.env
+*/.env.*
+provider/.env
+agent/.env
+agent/agent.env
+
+# Circle credentials
+.circle/
+
+# Build output
+dist/
+node_modules/
+provider/node_modules/
+agent/node_modules/
+
+# Foundry build cache
+contracts/out/
+contracts/cache/
+
+# Recovery files
+*.dat
+
+# Bun
+.bun/
+
+# Arc Studio runtime logs (contain RPC traces and console output — not for repo)
+console.jsonl
+traces.jsonl
+
+# Arc Studio helpers
+/home/user/arc-studio-helpers/
+BudgetRail/

@@ -1,0 +1,34 @@
+{
+  "note": "Values in this file are real onchain data. Never fabricate tx hashes or addresses.",
+  "chainId": 5042002,
+  "chainName": "Arc Testnet",
+  "rpc": "https://rpc.testnet.arc.io",
+  "usdcErc20Address": "0x3600000000000000000000000000000000000000",
+  "usdcErc20Decimals": 6,
+  "usdcNativeGasDecimals": 18,
+  "contract": {
+    "name": "BudgetRail",
+    "address": "0xf6a13df15ad93c2e2968e1d69c53894a923bda21",
+    "deployTxHash": "0xf33cb9096a45c5cc083fbee4366384f4257f509ab94fe46ec4291e775bc4a5d9",
+    "deployedAt": "2026-10-16T18:01:47.925Z",
+    "explorerUrl": "https://explorer.testnet.arc.io/address/0xf6a13df15ad93c2e2968e1d69c53894a923bda21",
+    "explorerTxUrl": "https://explorer.testnet.arc.io/tx/0xf33cb9096a45c5cc083fbee4366384f4257f509ab94fe46ec4291e775bc4a5d9",
+    "constructorArg_usdcAddress": "0x3600000000000000000000000000000000000000",
+    "verified_USDC_ADDRESS_onchain": "0x3600000000000000000000000000000000000000",
+    "verified_decimals_onchain": 6
+  },
+  "testnetLifecycle": {
+    "status": "PENDING_MANUAL_EXECUTION",
+    "note": "Populate fields below after running the manual checklist in docs/arc-studio-provenance.md",
+    "sessionId": null,
+    "createSessionTxHash": null,
+    "fundSessionTxHash": null,
+    "payment1TxHash": null,
+    "payment2TxHash": null,
+    "replayAttemptResult": null,
+    "overCapAttemptResult": null,
+    "closeSessionTxHash": null,
+    "finalOwnerBalanceDelta": null,
+    "finalProviderBalance": null
+  }
+}
