@@ -29,6 +29,8 @@ import { NetworkGuard } from "@/components/NetworkGuard";
 import { TxLink, AddrLink } from "@/components/ExplorerLink";
 import { TransactionStepper, type Step } from "@/components/TransactionStepper";
 import { ErrorBanner, ConfirmModal, SkeletonCard, StatusBadge } from "@/components/shared";
+import { WalletRolePanel } from "@/components/WalletRolePanel";
+import { OwnershipProof } from "@/components/OwnershipProof";
 import { toast } from "sonner";
 
 const CHAIN_ID = arcTestnet.id;
@@ -478,6 +480,22 @@ export function ManageSession() {
                 </div>
               )}
             </div>
+
+            {/* Who gets paid? — role panel with immutable chain state */}
+            <WalletRolePanel
+              ownerAddress={address}
+              session={session}
+              contractVersion="V1"
+              collapsed
+            />
+
+            {/* Ownership proof — operator can verify C or D ownership */}
+            {session.provider !== "0x0000000000000000000000000000000000000000" && (
+              <OwnershipProof
+                claimAddress={session.provider}
+                roleLabel="Provider payout C"
+              />
+            )}
 
             {/* ── ADD FUNDS (top-up) section ──────────────────────────────── */}
 

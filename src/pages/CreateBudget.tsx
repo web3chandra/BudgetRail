@@ -6,12 +6,12 @@
  * Preflight: provider configuration guard + simulateContract before wallet opens.
  * Recovery: resumes from localStorage-persisted state after refresh.
  */
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAccount, useReadContract, useSwitchChain } from "wagmi";
 import { erc20Abi } from "viem";
 import { arcTestnet } from "viem/chains";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Users } from "lucide-react";
 import { getUsdc } from "@/onchain-facts";
 import {
   BUDGET_RAIL_ADDRESS,
@@ -31,7 +31,7 @@ import { NetworkGuard } from "@/components/NetworkGuard";
 import { TransactionStepper, type Step } from "@/components/TransactionStepper";
 import { TxLink } from "@/components/ExplorerLink";
 import { ErrorBanner, ConfirmModal } from "@/components/shared";
-import { useState } from "react";
+import { WalletRolePanel } from "@/components/WalletRolePanel";
 import { toast } from "sonner";
 
 const CHAIN_ID = arcTestnet.id;
@@ -231,6 +231,18 @@ export function CreateBudget() {
         </div>
       )}
 
+      {/* Who gets paid? — always visible, collapsed by default before form */}
+      <WalletRolePanel
+        ownerAddress={address}
+        agentAddress={
+          isValidAddress(form.agentAddress)
+            ? form.agentAddress
+            : undefined
+        }
+        contractVersion="V1"
+        collapsed
+      />
+
       <NetworkGuard>
         {!isConnected ? (
           <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-8 text-center space-y-4">
@@ -273,6 +285,25 @@ export function CreateBudget() {
                   />
                   {formErrors.agentAddress && (
                     <p className="text-xs text-[var(--danger)] mt-1">{formErrors.agentAddress}</p>
+                  )}
+
+                  {/* A = B wizard guidance */}
+                  {isValidAddress(form.agentAddress) && address &&
+                    form.agentAddress.toLowerCase() === address.toLowerCase() && (
+                    <div className="mt-2 flex items-start gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] px-3 py-2.5">
+                      <Users size={13} className="shrink-0 text-[var(--accent)] mt-0.5" />
+                      <div className="space-y-0.5">
+                        <p className="text-xs font-semibold text-[var(--ink-2)]">Same-wallet demo mode (A = B)</p>
+                        <p className="text-xs text-[var(--subtle)] text-pretty">
+                          Agent B is the same as owner A. This is useful for manual testing — you can create, fund, and pay
+                          from one wallet. For a live integration, set B to a separate agent wallet that runs autonomously.
+                        </p>
+                        <p className="text-xs text-[var(--subtle)]">
+                          Note: as agent B, you will also need gas to call <span className="mono">payForRequest</span>.
+                          On Arc Testnet, USDC doubles as gas.
+                        </p>
+                      </div>
+                    </div>
                   )}
                 </div>
 

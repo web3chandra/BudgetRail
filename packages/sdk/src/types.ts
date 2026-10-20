@@ -174,6 +174,43 @@ export class BudgetRailError extends Error {
   }
 }
 
+// ── Scan coverage ────────────────────────────────────────────────────────────
+
+export interface FailedRange {
+  fromBlock: bigint;
+  toBlock:   bigint;
+  error:     string;
+}
+
+/**
+ * Returned alongside scan results to describe coverage completeness.
+ * isComplete is only true when ALL windows succeeded and fromBlock ≤ deployBlock.
+ * Never treat partial results as complete when isComplete is false.
+ */
+export interface CoverageMetadata {
+  scannedFrom:  bigint;
+  scannedTo:    bigint;
+  chainHead:    bigint;
+  isComplete:   boolean;
+  failedRanges: FailedRange[];
+}
+
+/**
+ * Thrown by scanPaymentSettledEvents when one or more block windows fail after
+ * retries. partialResults contains events decoded before the failure; coverage
+ * contains the full failure map. Callers MUST check this error and warn the user.
+ */
+export class IncompleteHistoryError extends Error {
+  constructor(
+    message: string,
+    public readonly partialResults: import("./read.js").ScannedPayment[],
+    public readonly coverage: CoverageMetadata,
+  ) {
+    super(message);
+    this.name = "IncompleteHistoryError";
+  }
+}
+
 // ── Provider health ───────────────────────────────────────────────────────
 
 export interface ProviderHealth {

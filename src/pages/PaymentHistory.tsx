@@ -1,314 +1,433 @@
 /**
- * Page 4 — Payment History (/payments)
- * PaymentSettled events from BudgetRail, windowed eth_getLogs (<10 000 blocks per request),
- * with cursor-based pagination, session/agent/provider filter, and verified event source.
+ * Page 4 — Activity History (/payments)
+ *
+ * Shows ALL four BudgetRail V1 event types:
+ *   SessionCreated · SessionFunded · PaymentSettled · SessionClosed
+ *
+ * Uses historyScanner for:
+ *   - Windowed getLogs (≤ 9 999 blocks per call)
+ *   - Exponential-backoff retry on RPC errors — never silently skips
+ *   - Dedup by chainId + contract + txHash + logIndex
+ *   - Explicit coverage metadata (scannedFrom/To, failedRanges, isComplete)
+ *   - Cancellable via AbortController
+ *   - 5-minute localStorage checkpoint so refresh only re-scans new blocks
+ *
+ * Tabs:  All · Payments · Deposits · Refunds
+ * Table sorts newest-first (reverse block order).
  */
-import { useState, useCallback } from "react";
-import { parseAbi } from "viem";
+import { useState, useCallback, useRef } from "react";
+import {
+  RefreshCw, ChevronLeft, ChevronRight, AlertTriangle, CheckCircle2, Clock,
+} from "lucide-react";
 
-import { Search, RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
 import { BUDGET_RAIL_ADDRESS, DEPLOY_BLOCK_TESTNET } from "@/lib/budgetRail";
+import {
+  scanAllEvents, scanRecentEvents, filterByTab, eventTypeLabel, eventTypeColor,
+  saveCheckpoint, loadCheckpoint, clearCheckpoint,
+  type ActivityEvent, type ActivityEventTab, type CoverageResult, type ScanProgress,
+} from "@/lib/historyScanner";
 import { formatUsdcShort } from "@/lib/format";
 import { TxLink, AddrLink } from "@/components/ExplorerLink";
 import { ErrorBanner, EmptyState, Skeleton } from "@/components/shared";
+import { arcTestnet } from "viem/chains";
 
-const WINDOW_SIZE       = 9_999n;  // <10 000 per getLogs call (RPC limit)
-const PAGE_SIZE         = 20;
-const SCAN_WINDOWS      = 5;       // default: scan last 5 × 9999 ≈ 50k blocks
-const BACKOFF_MS        = 1_200;   // delay between windows to avoid RPC rate-limits
-const MAX_FULL_WINDOWS  = 500;     // safety cap for full-history scan (~5M blocks)
+const CHAIN_ID  = arcTestnet.id;
+const PAGE_SIZE = 20;
 
-// ── Types ──────────────────────────────────────────────────────────────────
+// ── Tab bar ───────────────────────────────────────────────────────────────────
 
-interface PaymentEvent {
-  txHash:      string;
-  blockNumber: bigint;
-  logIndex:    number;
-  sessionId:   bigint;
-  requestId:   string;
-  requestHash: string;
-  provider:    string;
-  agent:       string;
-  amount:      bigint;
-  quoteDeadline: bigint;
+const TABS: { id: ActivityEventTab; label: string }[] = [
+  { id: "all",      label: "All activity" },
+  { id: "payments", label: "Payments"     },
+  { id: "deposits", label: "Deposits"     },
+  { id: "refunds",  label: "Refunds"      },
+];
+
+// ── Coverage status badge ────────────────────────────────────────────────────
+
+function CoverageBadge({ result }: { result: CoverageResult }) {
+  if (result.isComplete) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-[var(--success)]">
+        <CheckCircle2 size={12} />
+        Full history (blocks {DEPLOY_BLOCK_TESTNET.toLocaleString()} – {result.scannedTo.toLocaleString()})
+      </span>
+    );
+  }
+  if (result.failedRanges.length > 0) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-[var(--danger)]">
+        <AlertTriangle size={12} />
+        {result.failedRanges.length} window{result.failedRanges.length > 1 ? "s" : ""} failed — history may be incomplete
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 text-xs text-[var(--subtle)]">
+      <Clock size={12} />
+      Partial: blocks {result.scannedFrom.toLocaleString()} – {result.scannedTo.toLocaleString()}.
+      Deploy block is {DEPLOY_BLOCK_TESTNET.toLocaleString()}. Click &quot;Full history&quot; to scan all.
+    </span>
+  );
 }
 
-// ── Data fetching ──────────────────────────────────────────────────────────
+// ── Event row ─────────────────────────────────────────────────────────────────
 
-interface FetchResult {
-  events:      PaymentEvent[];
-  scannedFrom: bigint;   // lowest block actually scanned
-  chainHead:   bigint;   // chain head at time of scan
-  fullHistory: boolean;  // true when scan reached DEPLOY_BLOCK_TESTNET
-}
+function EventRow({ e }: { e: ActivityEvent }) {
+  const colorClass = eventTypeColor(e.type);
 
-async function fetchPaymentEvents(
-  contractAddress: `0x${string}`,
-  fullHistory = false,
-  onProgress?: (pct: number) => void,
-): Promise<FetchResult> {
-  const { createPublicClient, http } = await import("viem");
-  const { arcTestnet: chain } = await import("viem/chains");
-  const client = createPublicClient({ chain, transport: http() });
-
-  const latest = await client.getBlockNumber();
-  const PAYMENT_SETTLED_ABI = parseAbi([
-    "event PaymentSettled(uint256 indexed sessionId, bytes32 indexed requestId, address indexed provider, bytes32 requestHash, address agent, uint96 amount, uint64 quoteDeadline)",
-  ]);
-
-  const seenKeys = new Set<string>();
-  const events: PaymentEvent[] = [];
-  const maxWindows = fullHistory ? MAX_FULL_WINDOWS : SCAN_WINDOWS;
-  let scannedFrom = latest;
-  let reachedDeploy = false;
-
-  for (let i = 0; i < maxWindows; i++) {
-    const toBlock   = latest - BigInt(i) * WINDOW_SIZE;
-    // Never scan below deploy block — the contract didn't exist before that
-    const fromBlock = toBlock >= WINDOW_SIZE + DEPLOY_BLOCK_TESTNET
-      ? toBlock - WINDOW_SIZE
-      : DEPLOY_BLOCK_TESTNET;
-    if (fromBlock > toBlock || toBlock < DEPLOY_BLOCK_TESTNET) { reachedDeploy = true; break; }
-    if (fromBlock <= DEPLOY_BLOCK_TESTNET) reachedDeploy = true;
-
-    scannedFrom = fromBlock;
-    onProgress?.(Math.min(99, Math.round((i / maxWindows) * 100)));
-
-    const logs = await client.getLogs({
-      address: contractAddress,
-      event: PAYMENT_SETTLED_ABI[0],
-      fromBlock,
-      toBlock,
-    });
-
-    for (const log of logs) {
-      const key = `${log.transactionHash ?? ""}-${log.logIndex ?? 0}`;
-      if (seenKeys.has(key)) continue; // deduplicate across overlapping windows
-      seenKeys.add(key);
-      const a = log.args;
-      events.push({
-        txHash:        log.transactionHash ?? "",
-        blockNumber:   log.blockNumber ?? 0n,
-        logIndex:      log.logIndex ?? 0,
-        sessionId:     a.sessionId as bigint,
-        requestId:     (a.requestId as string) ?? "",
-        requestHash:   (a.requestHash as string) ?? "",
-        provider:      (a.provider as string) ?? "",
-        agent:         (a.agent as string) ?? "",
-        amount:        a.amount as bigint,
-        quoteDeadline: a.quoteDeadline as bigint,
-      });
+  function amountCell() {
+    switch (e.type) {
+      case "PaymentSettled": return (
+        <span className="tabular font-semibold text-[var(--success)]">
+          {e.amount !== undefined ? formatUsdcShort(e.amount) : "—"}
+        </span>
+      );
+      case "SessionFunded": return (
+        <span className="tabular font-semibold text-blue-400">
+          +{e.fundAmount !== undefined ? formatUsdcShort(e.fundAmount) : "—"}
+        </span>
+      );
+      case "SessionClosed": return (
+        <span className="tabular text-[var(--muted)]">
+          {e.refunded !== undefined ? `refund ${formatUsdcShort(e.refunded)}` : "—"}
+        </span>
+      );
+      case "SessionCreated": return (
+        <span className="tabular text-[var(--subtle)]">
+          cap {e.perPaymentCap !== undefined ? formatUsdcShort(e.perPaymentCap) : "—"}/call
+        </span>
+      );
     }
-
-    if (reachedDeploy) break;
-    // Backoff between windows to avoid RPC rate-limits
-    if (i < maxWindows - 1) await new Promise(r => setTimeout(r, BACKOFF_MS));
   }
 
-  onProgress?.(100);
+  function detailCell() {
+    switch (e.type) {
+      case "PaymentSettled":
+        return e.paymentAgent ? <AddrLink address={e.paymentAgent} /> : <span className="text-[var(--subtle)]">—</span>;
+      case "SessionFunded":
+      case "SessionClosed":
+      case "SessionCreated":
+        return e.owner ? <AddrLink address={e.owner} /> : <span className="text-[var(--subtle)]">—</span>;
+    }
+  }
 
-  // Sort: descending by blockNumber, then logIndex
-  events.sort((a, b) => {
-    if (b.blockNumber !== a.blockNumber) return b.blockNumber > a.blockNumber ? 1 : -1;
-    return b.logIndex - a.logIndex;
-  });
-
-  return { events, scannedFrom, chainHead: latest, fullHistory: reachedDeploy };
+  return (
+    <tr className="border-b border-[var(--border)] last:border-0 hover:bg-[var(--surface)] transition-colors">
+      <td className="px-4 py-3">
+        <TxLink hash={e.txHash} />
+      </td>
+      <td className="px-4 py-3">
+        <span className={`text-xs font-semibold ${colorClass}`}>
+          {eventTypeLabel(e.type)}
+        </span>
+      </td>
+      <td className="px-4 py-3 tabular font-semibold text-[var(--accent)] text-xs">
+        #{e.sessionId.toString()}
+      </td>
+      <td className="px-4 py-3 text-xs">{amountCell()}</td>
+      <td className="px-4 py-3 text-xs">{detailCell()}</td>
+      <td className="px-4 py-3 tabular text-xs text-[var(--subtle)]">
+        {e.blockNumber.toString()}
+      </td>
+    </tr>
+  );
 }
 
-// ── Page component ─────────────────────────────────────────────────────────
+// ── Page ──────────────────────────────────────────────────────────────────────
 
 export function PaymentHistory() {
-  const [events,       setEvents]       = useState<PaymentEvent[]>([]);
-  const [loading,      setLoading]      = useState(false);
-  const [error,        setError]        = useState<string | null>(null);
-  const [fetched,      setFetched]      = useState(false);
-  const [page,         setPage]         = useState(0);
-  const [scanProgress, setScanProgress] = useState(0);
-  const [scanMeta,     setScanMeta]     = useState<{ scannedFrom: bigint; chainHead: bigint; fullHistory: boolean } | null>(null);
+  const [result,   setResult]   = useState<CoverageResult | null>(null);
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState<string | null>(null);
+  const [progress, setProgress] = useState<ScanProgress | null>(null);
+  const [tab,      setTab]      = useState<ActivityEventTab>("all");
+  const [page,     setPage]     = useState(0);
 
-  const [filterSession,  setFilterSession]  = useState("");
-  const [filterAgent,    setFilterAgent]    = useState("");
-  const [filterProvider, setFilterProvider] = useState("");
+  const abortRef = useRef<AbortController | null>(null);
 
-  const load = useCallback(async (fullHistory = false) => {
+  // Derived: events for the active tab, newest-first
+  const tabEvents = result
+    ? [...filterByTab(result.events, tab)].reverse()
+    : [];
+  const totalPages  = Math.ceil(tabEvents.length / PAGE_SIZE);
+  const pageEvents  = tabEvents.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+
+  // Tab counts
+  function tabCount(t: ActivityEventTab): number {
+    if (!result) return 0;
+    return filterByTab(result.events, t).length;
+  }
+
+  const cancel = useCallback(() => {
+    abortRef.current?.abort();
+    setLoading(false);
+  }, []);
+
+  const load = useCallback(async (fullHistory: boolean) => {
+    // Cancel any in-progress scan
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+
     setLoading(true);
     setError(null);
-    setScanProgress(0);
+    setProgress(null);
+
     try {
-      const result = await fetchPaymentEvents(BUDGET_RAIL_ADDRESS, fullHistory, setScanProgress);
-      setEvents(result.events);
-      setScanMeta({ scannedFrom: result.scannedFrom, chainHead: result.chainHead, fullHistory: result.fullHistory });
-      setFetched(true);
-      setPage(0);
+      let scanResult: CoverageResult;
+
+      if (fullHistory) {
+        // Check if we have a recent checkpoint covering the full range
+        const cached = loadCheckpoint(CHAIN_ID, BUDGET_RAIL_ADDRESS, DEPLOY_BLOCK_TESTNET);
+        if (cached) {
+          // We have a cached baseline; scan only new blocks on top
+          const fromBlock = cached.toBlock + 1n;
+          const existing = cached.events;
+          const newResult = await scanAllEvents(BUDGET_RAIL_ADDRESS, {
+            fromBlock,
+            signal:     ctrl.signal,
+            onProgress: setProgress,
+          });
+
+          // Merge, dedup, re-sort
+          const seen = new Set(existing.map(e => e.key));
+          const merged = [...existing];
+          for (const e of newResult.events) {
+            if (!seen.has(e.key)) { seen.add(e.key); merged.push(e); }
+          }
+          merged.sort((a, b) => {
+            if (a.blockNumber !== b.blockNumber) return a.blockNumber < b.blockNumber ? -1 : 1;
+            return a.logIndex - b.logIndex;
+          });
+
+          scanResult = {
+            ...newResult,
+            events:      merged,
+            scannedFrom: DEPLOY_BLOCK_TESTNET,
+            isComplete:  newResult.failedRanges.length === 0 && !ctrl.signal.aborted,
+          };
+        } else {
+          scanResult = await scanAllEvents(BUDGET_RAIL_ADDRESS, {
+            signal:     ctrl.signal,
+            onProgress: setProgress,
+          });
+        }
+
+        // Persist checkpoint for next refresh
+        if (!ctrl.signal.aborted) {
+          saveCheckpoint(CHAIN_ID, BUDGET_RAIL_ADDRESS,
+            DEPLOY_BLOCK_TESTNET, scanResult.scannedTo, scanResult.events);
+        }
+      } else {
+        scanResult = await scanRecentEvents(BUDGET_RAIL_ADDRESS, 3, {
+          signal:     ctrl.signal,
+          onProgress: setProgress,
+        });
+      }
+
+      if (!ctrl.signal.aborted) {
+        setResult(scanResult);
+        setPage(0);
+        if (scanResult.failedRanges.length > 0) {
+          setError(
+            `${scanResult.failedRanges.length} block window(s) failed after retries. ` +
+            `History may be incomplete. Failed ranges: ` +
+            scanResult.failedRanges
+              .slice(0, 3)
+              .map(r => `${r.fromBlock}–${r.toBlock}`)
+              .join(", ") +
+            (scanResult.failedRanges.length > 3 ? " …" : ""),
+          );
+        }
+      }
     } catch (e) {
-      setError((e as Error).message);
+      if (!ctrl.signal.aborted) {
+        setError((e as Error).message);
+      }
     } finally {
-      setLoading(false);
-      setScanProgress(100);
+      if (!ctrl.signal.aborted) setLoading(false);
     }
   }, []);
 
-  // Filter
-  const filtered = events.filter(e => {
-    if (filterSession  && !e.sessionId.toString().includes(filterSession.trim())) return false;
-    if (filterAgent    && !e.agent.toLowerCase().includes(filterAgent.trim().toLowerCase())) return false;
-    if (filterProvider && !e.provider.toLowerCase().includes(filterProvider.trim().toLowerCase())) return false;
-    return true;
-  });
+  function handleClearCache() {
+    clearCheckpoint(CHAIN_ID, BUDGET_RAIL_ADDRESS, DEPLOY_BLOCK_TESTNET);
+    setResult(null);
+    setError(null);
+    setProgress(null);
+  }
 
-  const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
-  const page_events = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  // Progress percentage
+  const progressPct = progress
+    ? Math.round((progress.windowsDone / Math.max(1, progress.windowsTotal)) * 100)
+    : 0;
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="display font-bold text-2xl text-[var(--ink)] tracking-tight">Payment History</h1>
+          <h1 className="display font-bold text-2xl text-[var(--ink)] tracking-tight">
+            Activity History
+          </h1>
           <p className="text-sm text-[var(--subtle)] mt-1">
-            Agent payments only — not session creation or USDC deposits.
-            Each row is a confirmed <span className="mono text-xs">PaymentSettled</span> event from the BudgetRail contract.
+            All BudgetRail events: session creation, USDC deposits, agent payments and refunds.
+            Source: <span className="mono text-xs">{BUDGET_RAIL_ADDRESS}</span>
           </p>
         </div>
-        <div className="flex gap-2 flex-shrink-0">
-          <button
-            onClick={() => { void load(false); }}
-            disabled={loading}
-            className="inline-flex items-center gap-2 rounded-xl bg-[var(--accent)] text-[#0d1b2f]
-                       px-4 py-2.5 text-sm font-semibold hover:bg-[var(--accent-hover)]
-                       disabled:opacity-50 transition-colors"
-          >
-            <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
-            {fetched ? "Refresh" : "Load events"}
-          </button>
-          {fetched && scanMeta && !scanMeta.fullHistory && !loading && (
+        <div className="flex gap-2 flex-shrink-0 flex-wrap">
+          {loading ? (
             <button
-              onClick={() => { void load(true); }}
+              onClick={cancel}
               className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)]
-                         bg-[var(--surface)] text-[var(--ink-2)] px-4 py-2.5 text-sm font-semibold
+                         bg-[var(--surface)] text-[var(--danger)] px-4 py-2.5 text-sm font-semibold
                          hover:bg-[var(--surface-strong)] transition-colors"
-              title="Scan all blocks from contract deployment"
             >
-              Full history
+              Cancel
             </button>
+          ) : (
+            <>
+              <button
+                onClick={() => { void load(false); }}
+                className="inline-flex items-center gap-2 rounded-xl bg-[var(--accent)] text-[#0d1b2f]
+                           px-4 py-2.5 text-sm font-semibold hover:bg-[var(--accent-hover)]
+                           disabled:opacity-50 transition-colors"
+              >
+                <RefreshCw size={14} />
+                {result ? "Refresh" : "Load recent"}
+              </button>
+              {result && (
+                <button
+                  onClick={() => { void load(true); }}
+                  className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)]
+                             bg-[var(--surface)] text-[var(--ink-2)] px-4 py-2.5 text-sm font-semibold
+                             hover:bg-[var(--surface-strong)] transition-colors"
+                  title="Scan all blocks from contract deployment"
+                >
+                  Full history
+                </button>
+              )}
+              {result && (
+                <button
+                  onClick={handleClearCache}
+                  className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)]
+                             bg-[var(--surface)] text-[var(--subtle)] px-3 py-2.5 text-xs
+                             hover:bg-[var(--surface-strong)] transition-colors"
+                  title="Clear local cache and rescan"
+                >
+                  Clear cache
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>
 
-      {error && <ErrorBanner message={`RPC error: ${error}. Arc Testnet may be rate-limiting. Try again shortly.`} onDismiss={() => setError(null)} />}
+      {/* Errors */}
+      {error && (
+        <ErrorBanner
+          message={error}
+          onDismiss={() => setError(null)}
+        />
+      )}
 
-      {/* Scan progress bar */}
+      {/* Progress bar */}
       {loading && (
-        <div className="space-y-1">
-          <div className="h-1 w-full bg-[var(--surface-strong)] rounded-full overflow-hidden">
+        <div className="space-y-1.5">
+          <div className="h-1.5 w-full bg-[var(--surface-strong)] rounded-full overflow-hidden">
             <div
               className="h-full bg-[var(--accent)] transition-all duration-300 rounded-full"
-              style={{ width: `${scanProgress}%` }}
+              style={{ width: `${progressPct}%` }}
             />
           </div>
           <p className="text-xs text-[var(--subtle)]">
-            Scanning blocks… {scanProgress < 100 ? `${scanProgress}%` : "done"}
+            {progress
+              ? `Scanning block ${progress.scannedBlock.toLocaleString()} / ${progress.headBlock.toLocaleString()} — window ${progress.windowsDone}/${progress.windowsTotal} — ${progress.eventsSoFar} events so far`
+              : "Connecting…"
+            }
           </p>
         </div>
       )}
 
-      {/* Incomplete-history notice — never label unscanned history as "no payments" */}
-      {fetched && scanMeta && !scanMeta.fullHistory && !loading && (
-        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-xs text-[var(--subtle)] space-y-1">
-          <p>
-            Showing events from block <span className="mono tabular">{scanMeta.scannedFrom.toLocaleString()}</span> to{" "}
-            <span className="mono tabular">{scanMeta.chainHead.toLocaleString()}</span> (~50k blocks).
-            The contract was deployed at block <span className="mono tabular">{DEPLOY_BLOCK_TESTNET.toLocaleString()}</span>.
-          </p>
-          <p>
-            Older payments may exist but are not shown. Click <strong>Full history</strong> to scan from deployment.
-            This will take longer and may trigger rate-limiting.
-          </p>
+      {/* Coverage badge */}
+      {result && !loading && (
+        <div className="px-1">
+          <CoverageBadge result={result} />
         </div>
       )}
-      {fetched && scanMeta?.fullHistory && !loading && (
-        <p className="text-xs text-[var(--subtle)]">
-          Full history scanned: blocks {DEPLOY_BLOCK_TESTNET.toLocaleString()} – {scanMeta.chainHead.toLocaleString()}.
-        </p>
-      )}
 
-      {/* Filters */}
-      {fetched && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          {[
-            { label: "Session ID", value: filterSession, set: setFilterSession, placeholder: "e.g. 1" },
-            { label: "Agent",      value: filterAgent,   set: setFilterAgent,   placeholder: "0x..." },
-            { label: "Provider",   value: filterProvider, set: setFilterProvider, placeholder: "0x..." },
-          ].map(({ label, value, set, placeholder }) => (
-            <div key={label} className="relative">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--subtle)]" />
-              <input
-                type="text"
-                value={value}
-                onChange={e => { set(e.target.value); setPage(0); }}
-                placeholder={`Filter by ${label}: ${placeholder}`}
-                className="w-full pl-8 pr-3 py-2 rounded-xl border border-[var(--border)] bg-[var(--surface-muted)]
-                           text-xs text-[var(--ink)] placeholder:text-[var(--subtle)]
-                           focus:outline-none focus:ring-2 focus:ring-[var(--focus)]"
-              />
-            </div>
+      {/* Tabs */}
+      {result && (
+        <div className="flex gap-1 border-b border-[var(--border)]">
+          {TABS.map(t => (
+            <button
+              key={t.id}
+              onClick={() => { setTab(t.id); setPage(0); }}
+              className={`px-4 py-2.5 text-sm font-medium transition-colors -mb-px border-b-2 ${
+                tab === t.id
+                  ? "border-[var(--accent)] text-[var(--accent)]"
+                  : "border-transparent text-[var(--subtle)] hover:text-[var(--ink)]"
+              }`}
+            >
+              {t.label}
+              <span className="ml-1.5 text-xs opacity-70">
+                ({tabCount(t.id)})
+              </span>
+            </button>
           ))}
         </div>
       )}
 
-      {/* Table */}
-      {!fetched ? (
-        <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-8 text-center">
-          <p className="text-sm text-[var(--subtle)]">
-            Click "Load events" to fetch PaymentSettled events from Arc Testnet.
-            Results are derived exclusively from the deployed BudgetRail contract address.
-          </p>
+      {/* Content */}
+      {!result ? (
+        <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-10 text-center space-y-3">
+          {loading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-10 w-full" />)}
+            </div>
+          ) : (
+            <>
+              <p className="text-sm text-[var(--subtle)]">
+                Click <strong>Load recent</strong> for the last ~30k blocks,
+                or <strong>Full history</strong> to scan from contract deployment (block {DEPLOY_BLOCK_TESTNET.toLocaleString()}).
+              </p>
+              <p className="text-xs text-[var(--subtle)]">
+                Results are derived exclusively from the deployed BudgetRail contract.
+              </p>
+            </>
+          )}
         </div>
       ) : loading ? (
         <div className="space-y-2">
           {Array.from({ length: 5 }, (_, i) => <Skeleton key={i} className="h-12 w-full" />)}
         </div>
-      ) : filtered.length === 0 ? (
+      ) : tabEvents.length === 0 ? (
         <EmptyState
-          title={events.length > 0 ? "No events match filter" : scanMeta?.fullHistory ? "No payments found" : "No payments in scanned range"}
-          body={events.length > 0
-            ? "No PaymentSettled events match the current filter. Try clearing the filters."
-            : scanMeta?.fullHistory
-            ? "No PaymentSettled events found between contract deployment and the current block. Once an agent pays via BudgetRail, each payment appears here."
-            : "No PaymentSettled events found in the last ~50,000 blocks. Older payments may exist — click 'Full history' to scan from contract deployment (block 67,538,363)."}
+          title={`No ${tab === "all" ? "activity" : tab} found`}
+          body={
+            result.isComplete
+              ? `No ${tab === "all" ? "events" : tab} found from contract deployment to block ${result.scannedTo.toLocaleString()}.`
+              : `No ${tab === "all" ? "events" : tab} found in scanned range (${result.scannedFrom.toLocaleString()} – ${result.scannedTo.toLocaleString()}). ` +
+                `Click "Full history" to scan from deployment (block ${DEPLOY_BLOCK_TESTNET.toLocaleString()}).`
+          }
         />
       ) : (
         <>
           <div className="text-xs text-[var(--subtle)]">
-            {filtered.length} event{filtered.length !== 1 ? "s" : ""}
-            {(filterSession || filterAgent || filterProvider) ? " (filtered)" : ""}
+            {tabEvents.length} event{tabEvents.length !== 1 ? "s" : ""}
+            {tab !== "all" ? ` (${tab})` : ""}
           </div>
           <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
-            <table className="w-full text-xs min-w-[700px]">
+            <table className="w-full text-xs min-w-[680px]">
               <thead>
                 <tr className="border-b border-[var(--border)] bg-[var(--surface-muted)]">
-                  {["Tx", "Block", "Session", "Amount", "Agent", "Provider", "Deadline"].map(h => (
+                  {["Tx", "Type", "Session", "Amount / Info", "Owner / Agent", "Block"].map(h => (
                     <th key={h} className="text-left px-4 py-3 font-semibold text-[var(--subtle)]">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {page_events.map((e, _i) => (
-                  <tr
-                    key={`${e.txHash}-${e.logIndex}`}
-                    className="border-b border-[var(--border)] last:border-0 hover:bg-[var(--surface)] transition-colors"
-                  >
-                    <td className="px-4 py-3"><TxLink hash={e.txHash} /></td>
-                    <td className="px-4 py-3 tabular text-[var(--subtle)]">{e.blockNumber.toString()}</td>
-                    <td className="px-4 py-3 tabular font-semibold text-[var(--accent)]">#{e.sessionId.toString()}</td>
-                    <td className="px-4 py-3 tabular font-semibold text-[var(--success)]">{formatUsdcShort(e.amount)}</td>
-                    <td className="px-4 py-3"><AddrLink address={e.agent} /></td>
-                    <td className="px-4 py-3"><AddrLink address={e.provider} /></td>
-                    <td className="px-4 py-3 text-[var(--subtle)]">
-                      {new Date(Number(e.quoteDeadline) * 1000).toLocaleTimeString()}
-                    </td>
-                  </tr>
-                ))}
+                {pageEvents.map(e => <EventRow key={e.key} e={e} />)}
               </tbody>
             </table>
           </div>

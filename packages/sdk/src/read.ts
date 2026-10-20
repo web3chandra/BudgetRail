@@ -6,8 +6,13 @@
 
 import { createPublicClient, http, decodeEventLog, type Log } from "viem";
 import { BUDGET_RAIL_ABI, DEPLOY_BLOCK_TESTNET } from "./abi.js";
-import { BudgetRailError } from "./types.js";
-import type { BudgetRailConfig, Session, PaymentSettledEvent } from "./types.js";
+import { BudgetRailError, IncompleteHistoryError } from "./types.js";
+import type { BudgetRailConfig, Session, PaymentSettledEvent, CoverageMetadata, FailedRange } from "./types.js";
+
+/** Backoff base for window retries (ms). */
+const SDK_BACKOFF_MS  = 800;
+/** Max retry attempts per window before recording a failure. */
+const SDK_MAX_RETRIES = 3;
 
 // ── Internal viem client ──────────────────────────────────────────────────
 
@@ -193,45 +198,91 @@ export interface ScannedPayment extends PaymentSettledEvent {
 /**
  * Scan for PaymentSettled events in bounded ranges.
  * Paginates automatically; returns de-duplicated results sorted by block.
+ *
+ * Changed from original:
+ *  - Dedup key is now `${txHash}-${logIndex}` (not requestId alone).
+ *  - Failed windows are recorded in CoverageMetadata.failedRanges and re-thrown
+ *    as IncompleteHistoryError rather than silently swallowed.
+ *  - Returns CoverageMetadata alongside results so callers know scan completeness.
+ *  - Exponential backoff per window (up to MAX_RETRIES) before marking failed.
  */
 export async function scanPaymentSettledEvents(
   config: BudgetRailConfig,
   opts?: ScanOptions,
-): Promise<ScannedPayment[]> {
-  const client = makeClient(config);
+): Promise<{ events: ScannedPayment[]; coverage: CoverageMetadata }> {
+  const client     = makeClient(config);
   const windowSize = opts?.windowSize ?? 5000n;
   const fromBlock  = opts?.fromBlock  ?? DEPLOY_BLOCK_TESTNET;
   const head       = await client.getBlockNumber();
   const toBlock    = opts?.toBlock !== undefined && opts.toBlock < head ? opts.toBlock : head;
 
-  const seen = new Set<string>();
-  const results: ScannedPayment[] = [];
+  const seen    = new Set<string>();
+  const results: ScannedPayment[]  = [];
+  const failed:  FailedRange[]     = [];
 
   for (let start = fromBlock; start <= toBlock; start += windowSize + 1n) {
     const end = start + windowSize > toBlock ? toBlock : start + windowSize;
-    try {
-      const logs = await client.getLogs({
-        address: config.contractAddress,
-        fromBlock: start,
-        toBlock:   end,
-      });
-      for (const log of logs) {
-        const decoded = decodePaymentSettledLog(log as Log);
-        if (!decoded) continue;
-        const key = `${decoded.requestId}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        results.push({
-          ...decoded,
-          txHash:      (log.transactionHash ?? "0x") as `0x${string}`,
-          blockNumber: log.blockNumber ?? 0n,
+
+    let attempt = 0;
+    let lastErr  = "";
+    let succeeded = false;
+
+    while (attempt < SDK_MAX_RETRIES) {
+      try {
+        const logs = await client.getLogs({
+          address:   config.contractAddress,
+          fromBlock: start,
+          toBlock:   end,
         });
+        for (const log of logs) {
+          const decoded = decodePaymentSettledLog(log as Log);
+          if (!decoded) continue;
+          // Dedup by txHash + logIndex, NOT by requestId alone
+          const key = `${log.transactionHash ?? ""}-${log.logIndex ?? 0}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          results.push({
+            ...decoded,
+            txHash:      (log.transactionHash ?? "0x") as `0x${string}`,
+            blockNumber: log.blockNumber ?? 0n,
+          });
+        }
+        succeeded = true;
+        break;
+      } catch (e) {
+        lastErr = (e as Error).message;
+        attempt++;
+        if (attempt < SDK_MAX_RETRIES) {
+          await new Promise((r) => setTimeout(r, SDK_BACKOFF_MS * Math.pow(2, attempt - 1)));
+        }
       }
-    } catch {
-      // RPC may reject large ranges; skip this window and continue
-      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    if (!succeeded) {
+      failed.push({ fromBlock: start, toBlock: end, error: lastErr });
     }
   }
 
-  return results.sort((a, b) => (a.blockNumber < b.blockNumber ? -1 : 1));
+  const isComplete = failed.length === 0 && fromBlock <= DEPLOY_BLOCK_TESTNET;
+  const coverage: CoverageMetadata = {
+    scannedFrom:  fromBlock,
+    scannedTo:    toBlock,
+    chainHead:    head,
+    isComplete,
+    failedRanges: failed,
+  };
+
+  if (failed.length > 0) {
+    throw new IncompleteHistoryError(
+      `Scan incomplete: ${failed.length} window(s) failed after retries. ` +
+      `Partial results (${results.length} events) available via error.partialResults.`,
+      results,
+      coverage,
+    );
+  }
+
+  return {
+    events:   results.sort((a, b) => (a.blockNumber < b.blockNumber ? -1 : 1)),
+    coverage,
+  };
 }

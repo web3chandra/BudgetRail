@@ -42,8 +42,10 @@ export type {
   ProviderHealth,
   ServiceDescriptor,
   BudgetRailErrorCode,
+  CoverageMetadata,
+  FailedRange,
 } from "./types.js";
-export { BudgetRailError } from "./types.js";
+export { BudgetRailError, IncompleteHistoryError } from "./types.js";
 
 // ABI and constants
 export {

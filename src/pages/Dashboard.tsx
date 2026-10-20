@@ -6,13 +6,14 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useAccount, useReadContract, useReadContracts } from "wagmi";
-import { erc20Abi, parseAbi } from "viem";
+import { erc20Abi } from "viem";
 import { arcTestnet } from "viem/chains";
 import { PlusCircle, RefreshCw, ChevronLeft, ChevronRight, Zap } from "lucide-react";
 import { ConnectKitButton } from "connectkit";
 import { getUsdc } from "@/onchain-facts";
 import { formatUsdcShort, formatAddr, formatTs, sessionStatus, isExpired } from "@/lib/format";
-import { BUDGET_RAIL_ABI, BUDGET_RAIL_ADDRESS, DEPLOY_BLOCK_TESTNET, type SessionTuple } from "@/lib/budgetRail";
+import { BUDGET_RAIL_ABI, BUDGET_RAIL_ADDRESS, type SessionTuple } from "@/lib/budgetRail";
+import { scanRecentEvents, type ActivityEvent } from "@/lib/historyScanner";
 import { NetworkBadge } from "@/components/NetworkGuard";
 import { TxLink, AddrLink } from "@/components/ExplorerLink";
 import { SkeletonCard, EmptyState, ErrorBanner, StatusBadge } from "@/components/shared";
@@ -119,17 +120,14 @@ function SessionCard({ id, session }: { id: bigint; session: SessionTuple }) {
   );
 }
 
-// ── Recent PaymentSettled events (last N blocks, windowed) ────────────────
+// ── Recent ALL events — windowed scan, 3 windows (~30k blocks) ───────────────
+// Uses historyScanner which: batches getLogs, retries on 429, deduplicates,
+// and returns explicit coverage metadata. Never makes a single unbounded call.
 
 function useRecentPayments(contractAddress: `0x${string}`) {
-  // We use a fixed recent-block range so we never scan from genesis.
-  // The Vite proxy forwards /rpc to the Arc Testnet RPC; we call eth_getLogs directly.
-  const [events, setEvents] = useState<Array<{
-    txHash: string; sessionId: bigint; requestId: string;
-    provider: string; agent: string; amount: bigint; blockNumber: bigint;
-  }>>([]);
+  const [events,  setEvents]  = useState<ActivityEvent[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error,   setError]   = useState<string | null>(null);
   const [fetched, setFetched] = useState(false);
 
   async function fetchEvents() {
@@ -137,41 +135,17 @@ function useRecentPayments(contractAddress: `0x${string}`) {
     setLoading(true);
     setError(null);
     try {
-      const { createPublicClient, http } = await import("viem");
-      const { arcTestnet: chain } = await import("viem/chains");
-      const client = createPublicClient({ chain, transport: http() });
-
-      const latestBlock = await client.getBlockNumber();
-      // Scan from contract deploy block so historical payments are never missed.
-      // DEPLOY_BLOCK_TESTNET = 67_538_363n — do not scan from genesis.
-      const fromBlock = latestBlock > DEPLOY_BLOCK_TESTNET ? DEPLOY_BLOCK_TESTNET : 0n;
-
-      const PAYMENT_SETTLED_ABI = parseAbi([
-        "event PaymentSettled(uint256 indexed sessionId, bytes32 indexed requestId, address indexed provider, bytes32 requestHash, address agent, uint96 amount, uint64 quoteDeadline)",
-      ]);
-
-      const logs = await client.getLogs({
-        address: contractAddress,
-        event: PAYMENT_SETTLED_ABI[0],
-        fromBlock,
-        toBlock: latestBlock,
-      });
-
-      const parsed = logs.slice(-10).reverse().map(log => {
-        const args = log.args;
-        return {
-          txHash:    log.transactionHash ?? "",
-          sessionId: args.sessionId as bigint,
-          requestId: (args.requestId as string).slice(0, 18) + "…",
-          provider:  args.provider as string,
-          agent:     args.agent as string,
-          amount:    args.amount as bigint,
-          blockNumber: log.blockNumber ?? 0n,
-        };
-      });
-
-      setEvents(parsed);
+      const result = await scanRecentEvents(contractAddress, 3);
+      // Keep only PaymentSettled for the dashboard summary; newest-first, max 10
+      const payments = [...result.events]
+        .filter(e => e.type === "PaymentSettled")
+        .sort((a, b) => (a.blockNumber < b.blockNumber ? 1 : -1))
+        .slice(0, 10);
+      setEvents(payments);
       setFetched(true);
+      if (result.failedRanges.length > 0) {
+        setError(`${result.failedRanges.length} scan window(s) failed — data may be incomplete`);
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -397,13 +371,13 @@ export function Dashboard() {
                 </tr>
               </thead>
               <tbody>
-                {events.map((e, i) => (
-                  <tr key={i} className="border-b border-[var(--border)] last:border-0 hover:bg-[var(--surface)] transition-colors">
+                {events.map(e => (
+                  <tr key={e.key} className="border-b border-[var(--border)] last:border-0 hover:bg-[var(--surface)] transition-colors">
                     <td className="px-4 py-2.5"><TxLink hash={e.txHash} /></td>
                     <td className="px-4 py-2.5 tabular font-medium text-[var(--accent)]">#{e.sessionId.toString()}</td>
-                    <td className="px-4 py-2.5 tabular">{formatUsdcShort(e.amount)}</td>
-                    <td className="px-4 py-2.5"><AddrLink address={e.agent} /></td>
-                    <td className="px-4 py-2.5"><AddrLink address={e.provider} /></td>
+                    <td className="px-4 py-2.5 tabular">{e.amount !== undefined ? formatUsdcShort(e.amount) : "—"}</td>
+                    <td className="px-4 py-2.5">{e.paymentAgent ? <AddrLink address={e.paymentAgent} /> : <span className="text-[var(--subtle)]">—</span>}</td>
+                    <td className="px-4 py-2.5">{e.paymentProvider ? <AddrLink address={e.paymentProvider} /> : <span className="text-[var(--subtle)]">—</span>}</td>
                     <td className="px-4 py-2.5 tabular text-[var(--subtle)]">{e.blockNumber.toString()}</td>
                   </tr>
                 ))}
