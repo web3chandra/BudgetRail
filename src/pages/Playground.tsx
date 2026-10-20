@@ -147,6 +147,60 @@ function validateQuote(d: unknown): d is SignedQuote {
   );
 }
 
+// ── Structured error classifier ────────────────────────────────────────────
+
+interface ClassifiedError {
+  code: string;
+  userMessage: string;
+  retryable: boolean;
+  action: string;
+}
+
+function classifyError(raw: string, context: "quote" | "pay" | "fulfill"): ClassifiedError {
+  const msg = raw.toLowerCase();
+  if (context === "quote") {
+    if (msg.includes("session not found") || msg.includes("notfound"))
+      return { code: "SESSION_NOT_FOUND", userMessage: "Session not found on this contract/chain.", retryable: false, action: "Check the session ID and ensure you are on the correct network." };
+    if (msg.includes("session closed") || msg.includes("closed"))
+      return { code: "SESSION_CLOSED", userMessage: "This session is closed and can no longer accept payments.", retryable: false, action: "Create a new session." };
+    if (msg.includes("session expired") || msg.includes("expired"))
+      return { code: "SESSION_EXPIRED", userMessage: "This session has expired.", retryable: false, action: "Create a new session or top up an active one." };
+    if (msg.includes("provider") || msg.includes("503") || msg.includes("network") || msg.includes("fetch"))
+      return { code: "PROVIDER_UNREACHABLE", userMessage: "Provider API is unreachable.", retryable: true, action: "Check that the provider server is running, then retry." };
+    if (msg.includes("schema") || msg.includes("unexpected"))
+      return { code: "PROVIDER_SCHEMA_MISMATCH", userMessage: "Provider returned an unexpected response format.", retryable: false, action: "Check provider version compatibility." };
+  }
+  if (context === "pay") {
+    if (msg.includes("wrong network") || msg.includes("chain"))
+      return { code: "WRONG_NETWORK", userMessage: "Wrong network.", retryable: true, action: "Switch your wallet to Arc Testnet (chain 5042002)." };
+    if (msg.includes("notagent") || msg.includes("not agent") || msg.includes("unauthorized"))
+      return { code: "WRONG_AGENT", userMessage: "Connected wallet is not the authorized agent for this session.", retryable: false, action: "Switch to the agent wallet shown in the session details." };
+    if (msg.includes("quotesigner") || msg.includes("quote signer") || msg.includes("badsig") || msg.includes("bad sig") || msg.includes("signature"))
+      return { code: "SIGNER_MISMATCH", userMessage: "Quote signature verification failed.", retryable: false, action: "The provider's quote signer may have rotated. Request a new quote." };
+    if (msg.includes("deadline") || msg.includes("expired") || msg.includes("quoteexpired"))
+      return { code: "QUOTE_EXPIRED", userMessage: "Quote has expired.", retryable: true, action: "Request a new quote — no payment was taken." };
+    if (msg.includes("insufficient") || msg.includes("balance") || msg.includes("budget"))
+      return { code: "INSUFFICIENT_BALANCE", userMessage: "Insufficient session balance for this payment.", retryable: false, action: "Add funds to the session (owner only), then retry." };
+    if (msg.includes("gas") || msg.includes("intrinsic"))
+      return { code: "INSUFFICIENT_GAS", userMessage: "Transaction failed — insufficient gas.", retryable: true, action: "On Arc Testnet, USDC is gas. Ensure the agent wallet has USDC for gas." };
+    if (msg.includes("simulation failed"))
+      return { code: "SIM_FAILED", userMessage: "Transaction simulation failed — no gas spent.", retryable: false, action: raw.replace("Simulation failed: ", "") };
+    if (msg.includes("user rejected") || msg.includes("cancelled") || msg.includes("denied"))
+      return { code: "WALLET_REJECTED", userMessage: "Transaction was rejected in your wallet.", retryable: true, action: "Click Pay again when ready." };
+    if (msg.includes("reverted") || msg.includes("receipt"))
+      return { code: "TX_REVERTED", userMessage: "Transaction reverted onchain.", retryable: false, action: "Check session balance and quote validity, then request a fresh quote." };
+  }
+  if (context === "fulfill") {
+    if (msg.includes("tx not found") || msg.includes("402"))
+      return { code: "INDEXING_DELAY", userMessage: "Provider has not indexed your payment yet.", retryable: true, action: "Wait a few seconds and click Retry — no new payment needed." };
+    if (msg.includes("503") || msg.includes("network") || msg.includes("fetch"))
+      return { code: "PROVIDER_UNREACHABLE", userMessage: "Provider API is temporarily unreachable.", retryable: true, action: "Retry when the provider is back online — your payment is already confirmed." };
+    if (msg.includes("permanent") || msg.includes("400"))
+      return { code: "FULFILL_PERMANENT", userMessage: "Provider rejected the fulfillment request.", retryable: false, action: "Do NOT pay again. Contact the provider with your transaction hash." };
+  }
+  return { code: "UNKNOWN", userMessage: raw, retryable: context !== "pay", action: "" };
+}
+
 // Validate that a fulfill response has result + payment
 function validateFulfillResponse(d: unknown): d is { result: DocumentResult; payment: PaymentReceipt } {
   if (typeof d !== "object" || d === null) return false;
@@ -167,12 +221,14 @@ type Stage =
   | "done";
 
 interface FlowData {
-  stage:    Stage;
-  quote?:   SignedQuote;
-  hash?:    `0x${string}`;
-  result?:  DocumentResult;
-  payment?: PaymentReceipt;
-  error?:   string;
+  stage:      Stage;
+  quote?:     SignedQuote;
+  hash?:      `0x${string}`;
+  result?:    DocumentResult;
+  payment?:   PaymentReceipt;
+  error?:     string;
+  errorCode?: string;
+  errorAction?: string;
 }
 
 // ── Small helpers ──────────────────────────────────────────────────────────
@@ -259,7 +315,9 @@ export function Playground() {
   useEffect(() => {
     if (!isWalletError || flow.stage !== "paying") return;
     payInFlight.current = false;
-    setFlow({ stage: "pay_error", quote: flow.quote, error: parseOnchainError(walletError) });
+    const raw = parseOnchainError(walletError);
+    const classified = classifyError(raw, "pay");
+    setFlow({ stage: "pay_error", quote: flow.quote, error: classified.userMessage, errorCode: classified.code, errorAction: classified.action });
     resetWrite();
   }, [isWalletError, walletError, flow.stage, flow.quote, resetWrite]);
 
@@ -273,7 +331,9 @@ export function Playground() {
   useEffect(() => {
     if (!isReceiptError || flow.stage !== "confirming_tx") return;
     payInFlight.current = false;
-    setFlow(f => ({ ...f, stage: "pay_error", error: parseOnchainError(receiptError) + " (receipt)" }));
+    const raw = parseOnchainError(receiptError) + " (receipt)";
+    const classified = classifyError(raw, "pay");
+    setFlow(f => ({ ...f, stage: "pay_error", error: classified.userMessage, errorCode: classified.code, errorAction: classified.action }));
   }, [isReceiptError, receiptError, flow.stage]);
 
   // Receipt success → verify PaymentSettled → persist recovery → move to fulfilling
@@ -364,7 +424,9 @@ export function Playground() {
       }
       setFlow({ stage: "quote_ready", quote: data });
     } catch (err) {
-      setFlow({ stage: "pay_error", error: `Quote failed: ${(err as Error).message}` });
+      const raw = `Quote failed: ${(err as Error).message}`;
+      const classified = classifyError(raw, "quote");
+      setFlow({ stage: "pay_error", error: classified.userMessage, errorCode: classified.code, errorAction: classified.action });
     }
   }
 
@@ -400,7 +462,9 @@ export function Playground() {
         account: address,
       });
     } catch (simErr) {
-      setFlow({ stage: "quote_ready", quote, error: `Simulation failed: ${parseOnchainError(simErr)}` });
+      const raw = `Simulation failed: ${parseOnchainError(simErr)}`;
+      const classified = classifyError(raw, "pay");
+      setFlow({ stage: "quote_ready", quote, error: classified.userMessage, errorCode: classified.code, errorAction: classified.action });
       return;
     }
 
@@ -430,20 +494,18 @@ export function Playground() {
       });
       const data = await resp.json() as unknown;
       if (!resp.ok) {
-        const msg   = (data as Record<string, unknown>).error as string ?? `HTTP ${resp.status}`;
-        // 503 / network errors are retryable (provider temporarily down).
-        // 400 with permanent mismatch is NOT retryable (do not charge again).
-        // 402 "tx not found" is retryable (indexing delay).
-        const retryable = resp.status === 503 || resp.status === 402 ||
-          (data as Record<string, unknown>).retryable === true;
+        const msg = (data as Record<string, unknown>).error as string ?? `HTTP ${resp.status}`;
+        const classified = classifyError(msg, "fulfill");
         setFlow(f => ({ ...f, stage: "fulfill_error",
-          error: msg + (retryable ? " — provider error, retry is safe" : " — permanent, do NOT pay again"),
+          error: classified.userMessage, errorCode: classified.code, errorAction: classified.action,
           quote, hash }));
         return;
       }
       if (!validateFulfillResponse(data)) {
         setFlow(f => ({ ...f, stage: "fulfill_error",
-          error: "Provider returned unexpected response shape. Retry is safe — your payment is confirmed.",
+          error: "Provider returned unexpected response shape.",
+          errorCode: "PROVIDER_SCHEMA_MISMATCH",
+          errorAction: "Retry is safe — your payment is already confirmed onchain.",
           quote, hash }));
         return;
       }
@@ -453,10 +515,13 @@ export function Playground() {
       setFlow({ stage: "done", quote, hash, result: data.result, payment: data.payment });
       toast.success("Result received — payment verified onchain!");
     } catch (err) {
+      const classified = classifyError((err as Error).message, "fulfill");
       setFlow(f => ({
         ...f,
-        stage:  "fulfill_error",
-        error:  `Fulfillment network error: ${(err as Error).message}. Retry is safe — your payment is confirmed onchain.`,
+        stage:       "fulfill_error",
+        error:       classified.userMessage,
+        errorCode:   classified.code,
+        errorAction: classified.action || "Retry is safe — your payment is confirmed onchain.",
         quote,
         hash,
       }));
@@ -519,26 +584,36 @@ export function Playground() {
 
   // ── Stepper ──────────────────────────────────────────────────────────
 
+  // 4 explicit lifecycle stages as distinct stepper steps
   const steps: Step[] = [
     {
       id:     "quote",
-      label:  "Request signed quote",
+      label:  "1. Quote issued by provider",
       status: flow.stage === "fetching_quote" ? "active"
-            : flow.stage === "idle" || flow.stage === "pay_error" && !flow.quote ? "idle"
+            : (flow.stage === "idle" || (flow.stage === "pay_error" && !flow.quote)) ? "idle"
             : "success",
     },
     {
-      id:     "pay",
-      label:  "Agent pays via BudgetRail",
-      status: flow.stage === "paying" || flow.stage === "confirming_tx" ? "active"
-            : flow.stage === "fulfilling" || flow.stage === "fulfill_error" || flow.stage === "done" ? "success"
-            : flow.stage === "pay_error" && !!flow.quote ? "error"
+      id:     "broadcast",
+      label:  "2. Payment broadcast to chain",
+      status: flow.stage === "paying" ? "active"
+            : (flow.stage === "confirming_tx" || flow.stage === "fulfilling" || flow.stage === "fulfill_error" || flow.stage === "done") ? "success"
+            : (flow.stage === "pay_error" && !!flow.quote) ? "error"
+            : "idle",
+      detail: flow.hash,
+    },
+    {
+      id:     "confirm",
+      label:  "3. Payment confirmed onchain",
+      status: flow.stage === "confirming_tx" ? "active"
+            : (flow.stage === "fulfilling" || flow.stage === "fulfill_error" || flow.stage === "done") ? "success"
+            : (flow.stage === "pay_error" && !!flow.hash) ? "error"
             : "idle",
       detail: flow.hash,
     },
     {
       id:     "fulfill",
-      label:  "Provider verifies + delivers result",
+      label:  "4. Provider verifies + delivers result",
       status: flow.stage === "fulfilling" ? "active"
             : flow.stage === "done" ? "success"
             : flow.stage === "fulfill_error" ? "error"
@@ -797,7 +872,17 @@ export function Playground() {
                 {/* Pay error */}
                 {flow.stage === "pay_error" && (
                   <div className="space-y-3">
-                    <ErrorBanner message={flow.error ?? "Payment failed"} />
+                    <div className="rounded-xl border border-[var(--danger)] bg-[rgba(232,109,122,0.08)] px-4 py-3 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <AlertTriangle size={14} className="shrink-0 text-[var(--danger)]" />
+                        <p className="text-sm font-semibold text-[var(--danger)]">
+                          {flow.errorCode ? `[${flow.errorCode}] ` : ""}{flow.error ?? "Payment failed"}
+                        </p>
+                      </div>
+                      {flow.errorAction && (
+                        <p className="text-xs text-[var(--muted)] pl-5">{flow.errorAction}</p>
+                      )}
+                    </div>
                     <button
                       onClick={resetFlow}
                       className="w-full rounded-xl bg-[var(--surface-strong)] border border-[var(--border)]
@@ -811,7 +896,17 @@ export function Playground() {
                 {/* Fulfill error (retryable — no new payment) */}
                 {flow.stage === "fulfill_error" && (
                   <div className="space-y-3">
-                    <ErrorBanner message={flow.error ?? "Fulfillment failed"} />
+                    <div className="rounded-xl border border-amber-500/40 bg-amber-500/8 px-4 py-3 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <AlertTriangle size={14} className="shrink-0 text-amber-400" />
+                        <p className="text-sm font-semibold text-amber-300">
+                          {flow.errorCode ? `[${flow.errorCode}] ` : ""}{flow.error ?? "Fulfillment failed"}
+                        </p>
+                      </div>
+                      {flow.errorAction && (
+                        <p className="text-xs text-amber-200/70 pl-5">{flow.errorAction}</p>
+                      )}
+                    </div>
                     {flow.hash && <TxLink hash={flow.hash} label="Payment confirmed (view tx)" />}
                     <button
                       onClick={() => { handleRetryFulfill(); }}
@@ -821,7 +916,7 @@ export function Playground() {
                       Retry /api/fulfill — no new payment
                     </button>
                     <p className="text-xs text-[var(--subtle)]">
-                      Your payment is already confirmed onchain. Retrying only re-calls the provider API.
+                      Your payment is already confirmed onchain. Only /api/fulfill is retried — no new USDC is charged.
                     </p>
                   </div>
                 )}
@@ -851,14 +946,19 @@ export function Playground() {
                     </div>
 
                     {isAgentWallet ? (
-                      <button
-                        onClick={() => { void handlePay(); }}
-                        disabled={isWalletPending}
-                        className="w-full rounded-xl bg-[var(--accent)] text-[#0d1b2f] py-3 font-semibold
-                                   hover:bg-[var(--accent-hover)] disabled:opacity-50 transition-colors"
-                      >
-                        Pay {formatUsdcShort(BigInt(flow.quote.amount))} USDC via BudgetRail
-                      </button>
+                      <div className="space-y-2">
+                        <button
+                          onClick={() => { void handlePay(); }}
+                          disabled={isWalletPending}
+                          className="w-full rounded-xl bg-[var(--accent)] text-[#0d1b2f] py-3 font-semibold
+                                     hover:bg-[var(--accent-hover)] disabled:opacity-50 transition-colors"
+                        >
+                          Pay {formatUsdcShort(BigInt(flow.quote.amount))} USDC via BudgetRail
+                        </button>
+                        <p className="text-xs text-[var(--subtle)] text-center">
+                          Manual demo mode — you are clicking as the agent. In production, the agent wallet calls payForRequest autonomously without owner involvement.
+                        </p>
+                      </div>
                     ) : (
                       <div className="rounded-xl bg-[rgba(232,109,122,0.08)] border border-[var(--danger)] px-4 py-3 space-y-1">
                         <p className="text-sm text-[var(--danger)] font-semibold">Switch to agent wallet B to pay</p>

@@ -1,6 +1,6 @@
 # BudgetRail — Implementation Status
 
-Last updated: 2026-10-20 (Part 03 complete)
+Last updated: 2026-10-20 (Part 06 complete)
 
 ---
 
@@ -131,10 +131,129 @@ To activate the role panel correctly, set in `.env`:
 - `VITE_PROVIDER_PAYOUT=0x7D76349B806148594b8075A83b2f8fb12feaA743` (Role C — confirmed address)
 - `VITE_QUOTE_SIGNER=<D public address from provider/.env>` (Role D — derive from private key)
 
-### Remaining open items from Part 01/02/03
+---
+
+## Part 04 (V1 UX: Add Funds, payment recovery, error codes)
+
+Completed 2026-10-20.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `src/pages/Playground.tsx` | UPDATED — 4-step lifecycle stepper; structured error classifier with codes + actions for all failure modes; manual-demo clarification on Pay button; classifyError threaded through all error paths |
+| `src/pages/ManageSession.tsx` | UPDATED — Close & Refund explanation panel: who can close, refund math (funded−spent), no-reversal of settled payments, expiry-does-not-auto-refund, irreversibility |
+| `src/test/part04.test.ts` | NEW — 30 unit tests: parseUsdcUnits precision, topUpHeadroom cap math, canTopUp gating (closed/expired/full), Close & Refund accounting, isValidAddress, classifyError codes, recovery key uniqueness |
+
+### What is now in the UI
+
+- **Playground 4-step stepper:** Quote issued / Payment broadcast / Payment confirmed / Result delivered — each step is distinct and shows the correct status independently.
+- **Structured error codes:** every error path now shows `[ERROR_CODE] user message` + an actionable instruction. Codes: WRONG_AGENT, QUOTE_EXPIRED, INSUFFICIENT_BALANCE, INSUFFICIENT_GAS, SIGNER_MISMATCH, WALLET_REJECTED, WRONG_NETWORK, TX_REVERTED, PROVIDER_UNREACHABLE, INDEXING_DELAY, SIM_FAILED.
+- **Manual demo clarification:** Pay button shows "Manual demo mode — you are clicking as the agent. In production the agent wallet calls payForRequest autonomously."
+- **Close & Refund explanation:** expanded panel on ManageSession with live refund math, clear settlement irreversibility note, expiry-does-not-auto-refund note.
+- **Top-up headroom** was already correct (maxBudget − totalFunded, not maxBudget − availableBalance) — verified and confirmed in tests.
+
+### Manual testnet verification procedure
+
+No transactions are executed automatically. To verify Part 04 behavior manually:
+
+1. Open the Playground page, enter a session ID, paste text, click "Request signed quote".
+   - With provider running: should see step 1 turn green.
+   - With provider down: should see `[PROVIDER_UNREACHABLE] Provider API is unreachable.` with retry hint.
+2. With the WRONG wallet connected (not agent B): should see `[WRONG_AGENT]` error.
+3. Let a quote expire (wait past its deadline), then click Pay: should see `[QUOTE_EXPIRED]` with "Request a new quote" action.
+4. On Manage Session, expand the Close & Refund section and verify the live refund math matches `totalFunded − totalSpent`.
+5. On New Budget, enter your own address as agent B: should see "Same-wallet demo mode (A = B)" guidance.
+
+### Remaining open items
 
 - P0-A: Rotate `QUOTE_SIGNER_PRIVATE_KEY` if git history may have exposed it.
 - P0-B: Rotate embedded auth token in git remote URL.
 - P0-C: Execute testnet lifecycle manually to fill `evidence/testnet.json`.
+- P1-D: All frontend pages still hardcode `arcTestnet` import — deferred to Part 06+.
 - P1-E: Get a live hosted app URL and live provider backend URL.
-- All frontend pages still hardcode `arcTestnet` import (P1-D from Part 01) — deferred to Part 04+.
+
+---
+
+## Part 05 (V2 fee design — design-only, no Solidity)
+
+Completed 2026-10-20.
+
+### Files created
+
+| File | Description |
+|------|-------------|
+| `docs/V2-FEE-SPEC.md` | Full V2 design document — interface, EIP-712 schema, events, frontend/backend/SDK schema, sequence diagrams, V1/V2 compatibility plan, test matrix, threat model, acceptance criteria |
+
+### Key design decisions recorded
+
+- Fee: exactly 50 bps, immutable, computed in contract from `baseAmount` only (OI-2 pending final decision).
+- Treasury E: set at deploy, immutable, nonzero. Address TBD — operator must confirm before Part 06.
+- `grossUnits = baseUnits + floor(baseUnits * 50 / 10_000)` — consistent across contract/backend/frontend/SDK/agent.
+- Zero fee when `baseUnits < 200` — disclosed, no minimum added.
+- `PaymentSettledV2` is a distinct event from V1's `PaymentSettled` — no ABI collision.
+- EIP-712 domain `version: "2"` — no cross-version replay possible.
+- V1 sessions unaffected; no automatic migration.
+
+### Acceptance criteria before Part 06 (Solidity)
+
+- [ ] AC-1: This spec approved by operator.
+- [ ] AC-2: Treasury E address selected and ownership verified.
+- [ ] AC-3: OI-2 resolved (caller-supplied feeAmount vs contract-computed only).
+- [ ] AC-4: OI-5 resolved (stuck direct USDC transfers policy).
+- [ ] AC-5 to AC-7: See `docs/V2-FEE-SPEC.md` Section H.
+
+---
+
+## Part 06 (BudgetRailV2.sol + full Foundry test suite)
+
+Completed 2026-10-20.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `contracts/BudgetRailV2.sol` | NEW — 447-line V2 contract: 50 bps immutable fee, atomic two-transfer payout, `via_ir` compatible, full NatDoc |
+| `contracts/test/BudgetRailV2.t.sol` | NEW — 57 tests: 54 unit + 3 invariant (256 runs × 128,000 calls each) |
+| `foundry.toml` | `via_ir = true` added (required for V2 stack depth) |
+
+### Test results
+
+```
+Ran 2 test suites: 57 passed, 0 failed, 0 skipped
+  BudgetRailV2Test:      54/54  (unit)
+  BudgetRailV2Invariant:  3/3   (invariant, 384,000 fuzzer calls)
+```
+
+### Test coverage by category
+
+| Category | Tests | Key assertions |
+|----------|-------|----------------|
+| FEE arithmetic | FEE-01..09 | $0.05→250 fee, $1→5000 fee, zero-fee boundary 199/200, cap boundary, insufficient gross |
+| Authorization | AUTH-01..05 | wrong agent, owner≠agent, A=B mode, non-owner close/fund |
+| Signature/replay | SIG-01..12 | wrong key, replay, wrong chainId, wrong contract, V1 domain, tampered treasury/provider, inflated/deflated fee, expired deadline/session, deadline exceeds session |
+| Budget/lifecycle | BUD-01..14 | multi-deposit, refund math, zero refund, close after expiry, double close, top-up headroom rule, session isolation, zero params |
+| Atomicity/safety | ATOM-01..08 | blocked C, blocked E (C also gets nothing), blocked owner, reentrancy, no fee on create/fund/close, constructor guards |
+| Events | EVT-01..02 | PaymentSettledV2 fields, V1≠V2 selector |
+| Fuzz | FUZZ-01..04 | fee never rounds up, gross=base+fee always, only agent can pay, conservation invariant |
+| Invariants | 3 invariants | totalSpent≤totalFunded, totalFunded≤maxBudget, availableBalance consistent |
+
+### Gas costs (representative)
+
+| Operation | Gas |
+|-----------|-----|
+| createSession | ~231k |
+| fundSession | ~51k |
+| payForRequestV2 (base+fee) | ~434k |
+| closeSession (with refund) | ~305k |
+| computeFee (view) | ~6-7k |
+
+### Remaining open items
+
+- P0-A: Rotate `QUOTE_SIGNER_PRIVATE_KEY` if git history exposure confirmed.
+- P0-B: Rotate git remote embedded credential token.
+- P0-C: Execute testnet lifecycle manually.
+- AC-2: Treasury E address not yet selected — required before V2 deploy.
+- AC-3: OI-2 resolved in implementation (contract computes fee independently; caller-supplied feeAmount verified).
+- P1-D: Frontend pages still hardcode `arcTestnet` — deferred to Part 07+.
+- V2 not yet deployed (awaiting Part 07).

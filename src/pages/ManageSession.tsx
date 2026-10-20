@@ -661,17 +661,39 @@ export function ManageSession() {
 
             {/* ── CLOSE SESSION section ───────────────────────────────────── */}
 
-            {/* Risk disclosure */}
-            <div className="rounded-xl border border-[rgba(232,109,122,0.25)] bg-[rgba(232,109,122,0.05)] px-4 py-3 space-y-1.5">
+            {/* Close & Refund explanation */}
+            <div className="rounded-xl border border-[rgba(232,109,122,0.25)] bg-[rgba(232,109,122,0.05)] px-4 py-4 space-y-3">
               <div className="flex items-center gap-2 text-[var(--danger)]">
                 <ShieldAlert size={15} />
-                <p className="text-sm font-semibold">Closing is irreversible</p>
+                <p className="text-sm font-semibold">Close &amp; Refund — what happens</p>
               </div>
-              <p className="text-xs text-[var(--muted)]">
-                Closing returns the remaining funded balance ({formatUsdcShort(availableNow)}) to the owner.
-                Payments already settled to the provider cannot be reversed — only future payments are blocked.
-                The session cannot be reopened after closing.
-              </p>
+              <div className="space-y-1.5 text-xs text-[var(--muted)]">
+                <p>
+                  <strong className="text-[var(--ink-2)]">Who can close:</strong> only the session owner (wallet A).
+                  Agent B, provider C, or any other wallet cannot close your session.
+                </p>
+                <p>
+                  <strong className="text-[var(--ink-2)]">What is refunded:</strong> the available balance —
+                  total funded minus total already spent.
+                  {session && (
+                    <span className="tabular"> Currently: {formatUsdcShort(session.totalFunded)} funded − {formatUsdcShort(session.totalSpent)} spent = <strong className="text-[var(--success)]">{formatUsdcShort(availableNow)}</strong> refunded to you.</span>
+                  )}
+                </p>
+                <p>
+                  <strong className="text-[var(--ink-2)]">What is NOT refunded:</strong> USDC already paid to
+                  the provider in confirmed PaymentSettled transactions. Those transfers are permanent and cannot
+                  be reversed by closing, expiry, or any admin action.
+                </p>
+                <p>
+                  <strong className="text-[var(--ink-2)]">Session expiry:</strong> expiry alone does NOT
+                  automatically refund anything. The owner must explicitly call Close &amp; Refund to recover funds
+                  from an expired session. Until closed, any remaining balance stays locked in the contract.
+                </p>
+                <p>
+                  <strong className="text-[var(--ink-2)]">Irreversible:</strong> once closed, the session
+                  cannot be reopened. Create a new session if you need to resume payments.
+                </p>
+              </div>
             </div>
 
             {closeError && <ErrorBanner message={closeError} onDismiss={() => setCloseError(null)} />}
