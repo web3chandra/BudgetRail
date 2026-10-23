@@ -99,13 +99,14 @@ export async function handleQuotes(config: Config, req: Request): Promise<Respon
   }
 
   // ── 8. Validate price fits cap and remaining budget ──────────────────────
+  // L-01 fix (Part 10 audit): do not reveal exact session balance in error messages.
   const price = config.pricePerCall;
   if (price > session.perPaymentCap) {
-    return err(400, `Service price (${price}) exceeds session perPaymentCap (${session.perPaymentCap})`);
+    return err(400, "Service price exceeds session per-payment cap. Increase perPaymentCap when creating the session.");
   }
   const available = session.totalFunded - session.totalSpent;
   if (price > available) {
-    return err(400, `Insufficient funded balance: available ${available}, required ${price}`);
+    return err(400, "Insufficient funded balance. Fund the session with additional USDC before requesting a quote.");
   }
 
   // ── 9. Validate quote deadline ────────────────────────────────────────────

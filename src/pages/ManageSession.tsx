@@ -31,6 +31,7 @@ import { TransactionStepper, type Step } from "@/components/TransactionStepper";
 import { ErrorBanner, ConfirmModal, SkeletonCard, StatusBadge } from "@/components/shared";
 import { WalletRolePanel } from "@/components/WalletRolePanel";
 import { OwnershipProof } from "@/components/OwnershipProof";
+import { VersionBanner } from "@/components/VersionBanner";
 import { toast } from "sonner";
 
 const CHAIN_ID = arcTestnet.id;
@@ -416,6 +417,9 @@ export function ManageSession() {
         </div>
       </div>
 
+      {/* Version + network banner — always V1 for this page (V2 page not yet built) */}
+      <VersionBanner version="V1" />
+
       <NetworkGuard readOnly>
         {isLoading ? (
           <SkeletonCard />
@@ -457,7 +461,7 @@ export function ManageSession() {
                 {[
                   { label: "Max budget",          val: formatUsdcShort(session.maxBudget),    sub: "Lifetime ceiling" },
                   { label: "Total funded",         val: formatUsdcShort(session.totalFunded),  sub: "Cumulative deposits" },
-                  { label: "Total spent",          val: formatUsdcShort(session.totalSpent),   sub: "Agent payments" },
+                  { label: "Total spent (gross)",   val: formatUsdcShort(session.totalSpent),   sub: "V1: provider amount = gross, fee = 0" },
                   { label: "Available now",        val: formatUsdcShort(availableNow),         sub: "funded − spent", highlight: true },
                   { label: "Top-up headroom",      val: formatUsdcShort(topUpHeadroom),        sub: "maxBudget − funded" },
                   { label: "Expires",              val: isExpired(session.expiresAt) ? "Expired" : formatTs(session.expiresAt), sub: "" },

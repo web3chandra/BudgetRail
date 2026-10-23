@@ -223,6 +223,7 @@ export const DEPLOY_BLOCK_TESTNET = 67538363n;
 // For chain ID, explorer URL, RPC URL — import ARC from @/lib/arcProfile directly.
 export {
   PROVIDER_CONFIGURED,
+  V2_CONFIGURED,
   providerConfigError,
   ARC,
   type ArcProfile,

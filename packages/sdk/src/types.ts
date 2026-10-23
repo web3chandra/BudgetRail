@@ -211,6 +211,105 @@ export class IncompleteHistoryError extends Error {
   }
 }
 
+// ── V2 config extension ───────────────────────────────────────────────────
+
+/**
+ * V2-aware config. Extends V1 config with the V2 contract address and
+ * treasury address. deployBlock is required for history scans.
+ */
+export interface BudgetRailV2Config extends BudgetRailConfig {
+  /** Deployed BudgetRailV2 contract address. */
+  v2ContractAddress: `0x${string}`;
+  /** Treasury address E (immutable in V2 contract). */
+  treasuryAddress: `0x${string}`;
+  /** Block at which V2 was deployed (required for full-history scans). */
+  v2DeployBlock: bigint;
+}
+
+// ── V2 price object ────────────────────────────────────────────────────────
+
+/**
+ * Transparent V2 fee breakdown. All amounts are bigint base units (6 decimals).
+ * feeUnits = floor(baseUnits * 50 / 10_000).
+ * grossUnits = baseUnits + feeUnits.
+ * Cap checks MUST use grossUnits.
+ */
+export interface V2FeePrice {
+  /** Provider quoted price; provider C receives this. */
+  baseUnits: bigint;
+  /** Platform fee 50 bps; treasury E receives this. */
+  feeUnits: bigint;
+  /** Total session debit = baseUnits + feeUnits. Cap checks use this. */
+  grossUnits: bigint;
+  /** Always 50 for V2. */
+  feeBps: number;
+  /** Human-readable: "$0.050000 + $0.000250 fee = $0.050250 gross" */
+  displayBreakdown: string;
+}
+
+/** Compute exact V2 fee. Matches Solidity: floor(base * 50 / 10_000). */
+export function computeV2Fee(baseUnits: bigint): V2FeePrice {
+  const FEE_BPS = 50n;
+  const DENOM   = 10_000n;
+  const feeUnits   = (baseUnits * FEE_BPS) / DENOM;
+  const grossUnits = baseUnits + feeUnits;
+  const fmt = (u: bigint) => `$${(Number(u) / 1e6).toFixed(6)}`;
+  return {
+    baseUnits,
+    feeUnits,
+    grossUnits,
+    feeBps: 50,
+    displayBreakdown: `${fmt(baseUnits)} + ${fmt(feeUnits)} fee = ${fmt(grossUnits)} gross`,
+  };
+}
+
+// ── V2 signed quote ────────────────────────────────────────────────────────
+
+/** V2 quote includes the full fee breakdown in the signed message. */
+export interface SignedQuoteV2 {
+  version: "2";
+  sessionId: bigint;
+  requestId: `0x${string}`;
+  requestHash: `0x${string}`;
+  /** Provider base price (C receives this). */
+  baseAmount: bigint;
+  /** Platform fee (E receives this). floor(base * 50 / 10_000). */
+  feeAmount: bigint;
+  /** Gross = base + fee. Session is debited this amount. */
+  grossAmount: bigint;
+  quoteDeadline: bigint;
+  signature: `0x${string}`;
+  chainId: number;
+  contractAddress: `0x${string}`;
+  providerPayout: `0x${string}`;
+  treasuryAddress: `0x${string}`;
+  quoteSignerAddress: `0x${string}`;
+  service: string;
+  displayBreakdown: string;
+}
+
+// ── V2 payment event ───────────────────────────────────────────────────────
+
+export interface PaymentSettledV2Event {
+  sessionId: bigint;
+  requestId: `0x${string}`;
+  provider: `0x${string}`;
+  treasury: `0x${string}`;
+  requestHash: `0x${string}`;
+  agent: `0x${string}`;
+  baseAmount: bigint;
+  feeAmount: bigint;
+  grossAmount: bigint;
+  quoteDeadline: bigint;
+}
+
+export interface PaymentResultV2 {
+  txHash: `0x${string}`;
+  receipt: TransactionReceipt;
+  settledEvent: PaymentSettledV2Event;
+  feeBreakdown: V2FeePrice;
+}
+
 // ── Provider health ───────────────────────────────────────────────────────
 
 export interface ProviderHealth {

@@ -1,6 +1,6 @@
 # BudgetRail — Implementation Status
 
-Last updated: 2026-10-20 (Part 06 complete)
+Last updated: 2026-10-21 (Part 08 complete)
 
 ---
 
@@ -253,7 +253,162 @@ Ran 2 test suites: 57 passed, 0 failed, 0 skipped
 - P0-A: Rotate `QUOTE_SIGNER_PRIVATE_KEY` if git history exposure confirmed.
 - P0-B: Rotate git remote embedded credential token.
 - P0-C: Execute testnet lifecycle manually.
-- AC-2: Treasury E address not yet selected — required before V2 deploy.
-- AC-3: OI-2 resolved in implementation (contract computes fee independently; caller-supplied feeAmount verified).
-- P1-D: Frontend pages still hardcode `arcTestnet` — deferred to Part 07+.
-- V2 not yet deployed (awaiting Part 07).
+- AC-2: Treasury E set to `0x7D76349B806148594b8075A83b2f8fb12feaA743` (same as C for now; operator should separate before mainnet).
+- AC-3: Resolved — contract computes fee independently; caller feeAmount verified against contract formula.
+- P1-D: Frontend pages still hardcode `arcTestnet` — deferred to Part 08+.
+- V2 not yet deployed (awaiting Part 08 deploy step).
+
+---
+
+## Part 07 (V2 provider + agent backend/CLI)
+
+Completed 2026-10-20.
+
+### Files changed
+
+**`provider/src/lib/eip712.ts`** — V2 types appended: `PaymentQuoteV2`, `SignedQuoteV2`, `buildDomainV2`, `PAYMENT_QUOTE_V2_TYPES`, `computeV2Fee`, `signQuoteV2`, `formatV2DisplayPrice`.
+
+**`provider/src/lib/config.ts`** — V2 fields added: `v2ContractAddress`, `treasuryAddress`, `v2PricePerCall` (from env vars `BUDGET_RAIL_V2_ADDRESS`, `TREASURY_ADDRESS`, `V2_PRICE_PER_CALL_BASE_UNITS`).
+
+**`provider/src/lib/onchain.ts`** — V2 ABI, `readSessionV2`, `readV2Treasury`, `decodePaymentSettledV2Log` appended. V1 and V2 ABIs intentionally separate.
+
+**`provider/src/routes/quotesV2.ts`** (new) — `POST /api/quotes/v2`. Computes fee server-side, validates gross vs cap/balance, includes provider C and treasury E in signed data.
+
+**`provider/src/routes/fulfillV2.ts`** (new) — `POST /api/fulfill/v2`. Verifies PaymentSettledV2 event, two USDC Transfers (provider + treasury), fee arithmetic, treasury address match, block timestamp.
+
+**`provider/src/routes/health.ts`** — V2 config block added to health response when V2 is configured.
+
+**`provider/src/index.ts`** — Routes `/api/quotes/v2` and `/api/fulfill/v2` wired.
+
+**`agent/src/lib/chain.ts`** — V2 chain helpers appended: `readSessionV2`, `readV2Treasury`, `verifySessionPreFlightV2`, `estimatePayForRequestV2Gas`, `submitPayForRequestV2`, `findPaymentSettledV2Log`.
+
+**`agent/src/lib/eip712V2.ts`** (new) — Full V2 quote verification: all field checks, fee arithmetic, treasury match, EIP-712 signature recovery. Rejects V1 quotes.
+
+**`agent/src/demoV2.ts`** (new) — V2 CLI demo. Shows base/fee/gross breakdown before every confirmation. Treasury verified from chain before any spend. Operator confirmation required. Retry path via `--retry-request-id`.
+
+**`provider/test/fulfillV2.test.ts`** (new) — 35 tests across 9 suites. Covers: topic0 regression, real ABI decode, fee arithmetic, valid path, idempotency, version guard, fee attacks, address substitution, dual Transfer verification, settlement event attacks, RPC errors, privacy.
+
+### Test results
+
+- Provider tests: **108/108 pass** (all V1 + all V2)
+- Lint: 0 errors, 1 pre-existing warning
+- Typecheck: 0 errors
+
+### Remaining open items before V2 goes live
+
+- V2 contract not yet deployed — requires operator to set `BUDGET_RAIL_V2_ADDRESS` in `provider/.env`.
+- `TREASURY_ADDRESS` must be set in `provider/.env` after deploy (use the onchain `TREASURY` immutable value).
+- `VITE_BUDGET_RAIL_V2_ADDRESS` and `VITE_TREASURY_ADDRESS` to be added to frontend `.env` after deploy.
+- Frontend V2 session creation and payment UI not yet built (Part 08+).
+
+---
+
+## Part 08 (V2 frontend transparency)
+
+Completed 2026-10-21.
+
+### Files changed
+
+- `src/lib/arcProfile.ts` — V2 fields added: `v2ContractAddress`, `v2DeployBlock`, `treasuryAddress`; `V2_CONFIGURED` exported
+- `src/lib/budgetRailV2.ts` (new) — V2 ABI, `computeFeeV2()`, `verifyFeeV2()`, `minCapForBaseV2()`, fee constants
+- `src/components/VersionBanner.tsx` (new) — chain/version/contract/deploy block/explorer badge, treasury row for V2
+- `src/components/FeeBreakdown.tsx` (new) — base/fee/gross breakdown display (compact + full)
+- `src/pages/CreateBudget.tsx` — VersionBanner, V2 availability notice, V2 gross-inclusive cap guidance in Spending summary
+- `src/pages/ManageSession.tsx` — VersionBanner, "V1: provider amount = gross, fee = 0" label on total spent
+- `src/pages/Playground.tsx` — VersionBanner, V2 quote fee breakdown (base/fee/gross rows), V2 dual-transfer success display
+- `src/pages/PaymentHistory.tsx` — VersionBanner, V1/V2 isolation notice, V2 base/fee sub-row on PaymentSettled events
+- `src/test/part08.test.ts` (new) — 20 unit tests: fee arithmetic, verification, cap-with-gross, V1/V2 isolation, display edge cases
+
+### Test results
+
+- Lint: 0 errors, 1 pre-existing warning
+- Typecheck: 0 errors
+
+### Remaining open items
+
+- V2 contract deploy (Part 10)
+- Set `VITE_BUDGET_RAIL_V2_ADDRESS` and `VITE_TREASURY_ADDRESS` in `.env` after deploy
+- V2 session creation page (separate from V1 CreateBudget)
+- V2 Playground integration (payForRequestV2 call path)
+
+---
+
+## Part 09 (SDK V2 + external agent app integration)
+
+Completed 2026-10-21.
+
+### SDK changes (packages/sdk/)
+
+**types.ts:**
+- `BudgetRailV2Config` — extends V1 config with `v2ContractAddress`, `treasuryAddress`, `v2DeployBlock`
+- `V2FeePrice` — exact fee breakdown: `baseUnits`, `feeUnits`, `grossUnits`, `feeBps=50`, `displayBreakdown`
+- `computeV2Fee(base)` — pure bigint fee math exported from types (matches Solidity)
+- `SignedQuoteV2` — V2 signed quote with full fee fields + treasury
+- `PaymentSettledV2Event` + `PaymentResultV2`
+
+**abi.ts:**
+- `BUDGET_RAIL_V2_ABI` — full V2 ABI (read, write, errors, events)
+- `V2_FEE_BPS=50n`, `V2_FEE_DENOM=10_000n`
+
+**read.ts:**
+- `readSessionV2(config, sessionId)` — reads from V2 contract
+- `verifyV2Treasury(config)` — checks onchain TREASURY == config.treasuryAddress
+- `decodePaymentSettledV2Log(log, v2Addr)` — V2 event decoder; rejects V1 logs (strict isolation)
+- `scanPaymentSettledV2Events(config, opts)` — windowed getLogs, retry/backoff, dedup, CoverageMetadata
+
+**quote.ts:**
+- `requestQuoteV2(config, req)` — POST /api/quotes/v2
+- `verifyQuoteV2(config, quote, input, sessionId, grossCap)` — full V2 verification: chain, contract, provider, treasury, signer, fee math, gross cap, deadline, requestHash, EIP-712 sig
+- `computeV2Fee` re-exported for external callers
+
+**pay.ts:**
+- `simulatePayV2(config, agentAddr, sessionId, quote)` — eth_call preflight on V2 contract
+- `submitPaymentV2(config, signer, sessionId, quote)` — executes payForRequestV2, returns PaymentResultV2
+- `retrieveResultV2(config, params)` — POST /api/fulfill/v2
+
+**index.ts:** all V2 types and functions exported; V1 exports unchanged.
+
+**packages/sdk/tsconfig.json:** `types: ["node"]` added for Buffer / process.
+
+**SDK build:** `tsc` compiles cleanly to `dist/`.
+
+### SDK test results
+
+- **66/66 pass** (was 0 new V2 tests before Part 09; +30 new V2 tests added)
+- New test suites: V2 ABI, computeV2Fee (13 tests), decodePaymentSettledV2Log (3), wrong-wallet guard (3), V1/V2 event isolation (3), IncompleteHistoryError (1)
+
+### Example app (examples/agent-app/)
+
+- `package.json` — workspace dep on `@budgetrail/sdk`; scripts: simulate, start, test
+- `src/config.ts` — full role documentation; V1Config and V2Config objects; all values from env
+- `src/main.ts` — four runnable modes:
+  1. Offline fee simulation (no network; always runs)
+  2. Wrong-wallet guard demo (BudgetRailError PROVIDER_MISMATCH)
+  3. Live RPC: readSession, verifyV2Treasury, scanPaymentSettledV2Events
+  4. Live provider: requestQuoteV2 + verifyQuoteV2 (graceful skip if provider down)
+- `README.md` — what is real vs mocked, role table, V2 fee math, quickstart commands
+
+### What is real vs mocked / simulated
+
+| Behaviour | Status |
+|-----------|--------|
+| computeV2Fee arithmetic | **Real** — pure bigint |
+| verifyQuoteV2 checks | **Real** — EIP-712 sig recovery |
+| readSession RPC | **Real** — live Arc Testnet |
+| verifyV2Treasury | **Real** — onchain read |
+| scanPaymentSettledV2Events | **Real** — windowed getLogs |
+| requestQuoteV2 | **Requires provider** — graceful skip if down |
+| simulatePayV2 / submitPaymentV2 | **Not yet called** — operator supplies signer |
+| Session ID in example | **Demo value** (1) — replace with real |
+| x402 / HTTP 402 | **Not implemented, not claimed** |
+
+### Lint / typecheck
+
+- 0 errors, 1 pre-existing warning (payHashRaw in Playground.tsx)
+
+### Remaining open items
+
+- V2 contract deploy (Part 10)
+- Set env vars after deploy
+- Wire submitPaymentV2 in Playground page (V2 payment flow)
+- npm publish when ready (currently private workspace package)

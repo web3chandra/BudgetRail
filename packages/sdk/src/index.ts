@@ -26,7 +26,7 @@
  * ```
  */
 
-// Types
+// Types — V1
 export type {
   BudgetRailConfig,
   Session,
@@ -47,7 +47,17 @@ export type {
 } from "./types.js";
 export { BudgetRailError, IncompleteHistoryError } from "./types.js";
 
-// ABI and constants
+// Types — V2
+export type {
+  BudgetRailV2Config,
+  V2FeePrice,
+  SignedQuoteV2,
+  PaymentSettledV2Event,
+  PaymentResultV2,
+} from "./types.js";
+export { computeV2Fee } from "./types.js";
+
+// ABI and constants — V1
 export {
   BUDGET_RAIL_ABI,
   ERC20_ABI,
@@ -59,7 +69,14 @@ export {
   DEPLOY_BLOCK_TESTNET,
 } from "./abi.js";
 
-// Read operations (no signer needed)
+// ABI and constants — V2
+export {
+  BUDGET_RAIL_V2_ABI,
+  V2_FEE_BPS,
+  V2_FEE_DENOM,
+} from "./abi.js";
+
+// Read operations — V1 (no signer needed)
 export {
   readSession,
   listOwnerSessions,
@@ -70,7 +87,16 @@ export {
 } from "./read.js";
 export type { ScanOptions, ScannedPayment } from "./read.js";
 
-// Quote (no signer needed)
+// Read operations — V2 (no signer needed)
+export {
+  readSessionV2,
+  verifyV2Treasury,
+  decodePaymentSettledV2Log,
+  scanPaymentSettledV2Events,
+} from "./read.js";
+export type { ScannedPaymentV2 } from "./read.js";
+
+// Quote — V1 (no signer needed)
 export {
   checkProviderHealth,
   requestQuote,
@@ -79,7 +105,14 @@ export {
 } from "./quote.js";
 export type { QuoteRequest } from "./quote.js";
 
-// Payment and fund management (signer required)
+// Quote — V2 (no signer needed)
+export {
+  requestQuoteV2,
+  verifyQuoteV2,
+} from "./quote.js";
+export type { QuoteRequestV2 } from "./quote.js";
+
+// Payment and fund management — V1 (signer required)
 export {
   simulatePay,
   submitPayment,
@@ -87,6 +120,13 @@ export {
   retrieveResultByConfirmedPayment,
   addFunds,
   closeAndRefund,
+} from "./pay.js";
+
+// Payment — V2 (signer required)
+export {
+  simulatePayV2,
+  submitPaymentV2,
+  retrieveResultV2,
 } from "./pay.js";
 
 // Service registry

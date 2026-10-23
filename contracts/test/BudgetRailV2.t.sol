@@ -82,7 +82,8 @@ contract BudgetRailV2Test is Test {
     function setUp() public {
         quoteSigner = vm.addr(SIGNER_PK);
         usdc = new MockUSDC();
-        rail = new BudgetRailV2(address(usdc), TREASURY);
+        // Pass PROVIDER as hint — PROVIDER != TREASURY in tests, so no warning event fires.
+        rail = new BudgetRailV2(address(usdc), TREASURY, PROVIDER);
 
         usdc.mint(OWNER,    100_000_000);
         usdc.mint(OWNER2,   100_000_000);
@@ -755,7 +756,7 @@ contract BudgetRailV2Test is Test {
     function test_ATOM04_reentrancyBlocked() public {
         ReentrantUSDC rToken = new ReentrantUSDC();
         rToken.mint(OWNER, 100_000_000);
-        BudgetRailV2 rRail = new BudgetRailV2(address(rToken), TREASURY);
+        BudgetRailV2 rRail = new BudgetRailV2(address(rToken), TREASURY, address(0));
 
         vm.prank(OWNER);
         uint256 sid = rRail.createSession(AGENT, PROVIDER, quoteSigner, MAX_BUDGET, PER_CAP, _expiry());
@@ -799,19 +800,19 @@ contract BudgetRailV2Test is Test {
     // ATOM-06: Constructor rejects zero treasury
     function test_ATOM06_constructorZeroTreasury() public {
         vm.expectRevert(BudgetRailV2.ZeroAddress.selector);
-        new BudgetRailV2(address(usdc), address(0));
+        new BudgetRailV2(address(usdc), address(0), address(0));
     }
 
     // ATOM-07: Constructor rejects zero USDC
     function test_ATOM07_constructorZeroUsdc() public {
         vm.expectRevert(BudgetRailV2.ZeroAddress.selector);
-        new BudgetRailV2(address(0), TREASURY);
+        new BudgetRailV2(address(0), TREASURY, address(0));
     }
 
     // ATOM-08: Constructor rejects USDC with no code (EOA)
     function test_ATOM08_constructorUsdcMustHaveCode() public {
         vm.expectRevert("BudgetRailV2: USDC address has no code");
-        new BudgetRailV2(address(0x1234), TREASURY);
+        new BudgetRailV2(address(0x1234), TREASURY, address(0));
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -905,6 +906,36 @@ contract BudgetRailV2Test is Test {
         uint256 ownerGain = usdc.balanceOf(OWNER) - ownerBefore;
         assertEq(provBal + treasBal + ownerGain, budget, "conservation: provider+treasury+refund==funded");
     }
+
+    // ── Constructor / deployment warning ──────────────────────────────────────
+
+    /// @dev C=E: treasury == providerHint should emit TreasuryMatchesProviderWarning but NOT revert.
+    function test_constructor_CEqualsE_emitsWarning() public {
+        MockUSDC u = new MockUSDC();
+        address sharedAddr = address(0xBEEF);
+        // Expect the warning event to be emitted during construction.
+        vm.expectEmit(true, false, false, false);
+        emit BudgetRailV2.TreasuryMatchesProviderWarning(sharedAddr, "");
+        BudgetRailV2 r = new BudgetRailV2(address(u), sharedAddr, sharedAddr);
+        // Contract should still deploy successfully and treasury should be set.
+        assertEq(r.TREASURY(), sharedAddr, "treasury mismatch after C=E deploy");
+    }
+
+    /// @dev providerHint == address(0): no warning event, clean deploy.
+    function test_constructor_providerHintZero_noWarning() public {
+        MockUSDC u = new MockUSDC();
+        // address(0) hint: skip the C=E check; no event emitted, no revert.
+        BudgetRailV2 r = new BudgetRailV2(address(u), TREASURY, address(0));
+        assertEq(r.TREASURY(), TREASURY);
+    }
+
+    /// @dev C != E: no warning event when provider and treasury are different.
+    function test_constructor_CNotE_noWarning() public {
+        MockUSDC u = new MockUSDC();
+        // PROVIDER (0x3000) != TREASURY (0x4000): no event.
+        BudgetRailV2 r = new BudgetRailV2(address(u), TREASURY, PROVIDER);
+        assertEq(r.TREASURY(), TREASURY);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -990,7 +1021,8 @@ contract BudgetRailV2Invariant is Test {
 
     function setUp() public {
         usdc    = new MockUSDC();
-        rail    = new BudgetRailV2(address(usdc), TREASURY);
+        // address(0) hint: skip the C=E check in invariant tests (handler manages sessions).
+        rail    = new BudgetRailV2(address(usdc), TREASURY, address(0));
         handler = new BudgetRailV2Handler(rail, usdc);
         targetContract(address(handler));
     }

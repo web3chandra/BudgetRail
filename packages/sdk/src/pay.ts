@@ -6,14 +6,17 @@
  */
 
 import { createPublicClient, http, decodeEventLog, type Log } from "viem";
-import { BUDGET_RAIL_ABI, ERC20_ABI, USDC_ADDRESS } from "./abi.js";
-import { BudgetRailError } from "./types.js";
-import { decodePaymentSettledLog } from "./read.js";
+import { BUDGET_RAIL_ABI, BUDGET_RAIL_V2_ABI, ERC20_ABI, USDC_ADDRESS } from "./abi.js";
+import { BudgetRailError, computeV2Fee } from "./types.js";
+import { decodePaymentSettledLog, decodePaymentSettledV2Log } from "./read.js";
 import type {
   BudgetRailConfig,
+  BudgetRailV2Config,
   BudgetRailSigner,
   SignedQuote,
+  SignedQuoteV2,
   PaymentResult,
+  PaymentResultV2,
   AddFundsResult,
   CloseAndRefundResult,
 } from "./types.js";
@@ -332,6 +335,167 @@ function classifyRevert(msg: string): BudgetRailError["code"] {
   if (/QuoteExpired/i.test(msg))         return "QUOTE_EXPIRED";
   if (/PerPaymentCap/i.test(msg))        return "PER_PAYMENT_CAP_EXCEEDED";
   if (/BudgetExceeded|LifetimeBudget/i.test(msg)) return "BUDGET_EXCEEDED";
+  if (/ZeroAddress/i.test(msg))          return "ZERO_ADDRESS";
+  return "SIMULATION_FAILED";
+}
+
+// ── V2 payment functions ───────────────────────────────────────────────────
+
+/**
+ * Simulate payForRequestV2 to catch reverts before opening the wallet.
+ * Pass agentAddress as `from`. Throws BudgetRailError on failure.
+ */
+export async function simulatePayV2(
+  config: BudgetRailV2Config,
+  agentAddress: `0x${string}`,
+  sessionId: bigint,
+  quote: SignedQuoteV2,
+): Promise<void> {
+  const client = makeClient(config);
+  try {
+    await client.simulateContract({
+      address:      config.v2ContractAddress,
+      abi:          BUDGET_RAIL_V2_ABI,
+      functionName: "payForRequestV2",
+      args: [
+        sessionId,
+        quote.requestId,
+        quote.requestHash,
+        quote.baseAmount,
+        quote.feeAmount,
+        quote.quoteDeadline,
+        quote.signature,
+      ],
+      account: agentAddress,
+    });
+  } catch (err) {
+    const msg = (err as Error).message ?? String(err);
+    const code = classifyRevertV2(msg);
+    throw new BudgetRailError(code, `V2 simulation failed: ${msg}`, false, err);
+  }
+}
+
+/**
+ * Execute payForRequestV2 via the provided signer.
+ * Simulation should be called first via simulatePayV2.
+ * Returns the PaymentResultV2 with the full fee breakdown.
+ */
+export async function submitPaymentV2(
+  config: BudgetRailV2Config,
+  signer: BudgetRailSigner,
+  sessionId: bigint,
+  quote: SignedQuoteV2,
+): Promise<PaymentResultV2> {
+  let txHash: `0x${string}`;
+  try {
+    txHash = await signer.writeContract({
+      address:      config.v2ContractAddress,
+      abi:          BUDGET_RAIL_V2_ABI,
+      functionName: "payForRequestV2",
+      args: [
+        sessionId,
+        quote.requestId,
+        quote.requestHash,
+        quote.baseAmount,
+        quote.feeAmount,
+        quote.quoteDeadline,
+        quote.signature,
+      ],
+      chainId: config.chainId,
+    });
+  } catch (err) {
+    const msg = (err as Error).message ?? String(err);
+    if (isUserRejection(msg)) {
+      throw new BudgetRailError("UNKNOWN", "User rejected V2 transaction", false, err);
+    }
+    throw new BudgetRailError("UNKNOWN", `V2 tx submission failed: ${msg}`, false, err);
+  }
+
+  const receipt = await signer.waitForReceipt(txHash);
+
+  if (receipt.status !== "success") {
+    throw new BudgetRailError("PAYMENT_NOT_SETTLED", `V2 transaction ${txHash} reverted`, false);
+  }
+
+  // Find PaymentSettledV2 from the V2 contract
+  const settledEvent = receipt.logs
+    .map((l) => decodePaymentSettledV2Log(l as unknown as Log, config.v2ContractAddress))
+    .find((d) => d !== null && d.requestId.toLowerCase() === quote.requestId.toLowerCase());
+
+  if (!settledEvent) {
+    throw new BudgetRailError("PAYMENT_NOT_SETTLED", `PaymentSettledV2 event not found in tx ${txHash}`, false);
+  }
+
+  // Verify dual-transfer amounts
+  const expected = computeV2Fee(quote.baseAmount);
+  if (settledEvent.feeAmount !== expected.feeUnits || settledEvent.grossAmount !== expected.grossUnits) {
+    throw new BudgetRailError(
+      "PAYMENT_NOT_SETTLED",
+      `V2 event amounts mismatch: fee=${settledEvent.feeAmount} gross=${settledEvent.grossAmount} expected ${expected.feeUnits}/${expected.grossUnits}`,
+    );
+  }
+
+  return { txHash, receipt, settledEvent, feeBreakdown: expected };
+}
+
+/**
+ * Retrieve result via V2 fulfill endpoint after a confirmed payment.
+ * Idempotent — the same txHash + requestId always returns the same result.
+ */
+export async function retrieveResultV2(
+  config: BudgetRailV2Config,
+  params: {
+    txHash:    `0x${string}`;
+    quote:     SignedQuoteV2;
+    inputText: string;
+  },
+): Promise<{ result: unknown; payment: Record<string, unknown> }> {
+  const url = `${config.providerApiUrl}/api/fulfill/v2`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({
+        txHash: params.txHash,
+        quote: {
+          ...params.quote,
+          sessionId:     params.quote.sessionId.toString(),
+          baseAmount:    params.quote.baseAmount.toString(),
+          feeAmount:     params.quote.feeAmount.toString(),
+          grossAmount:   params.quote.grossAmount.toString(),
+          quoteDeadline: params.quote.quoteDeadline.toString(),
+        },
+        input: params.inputText,
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (err) {
+    throw new BudgetRailError("FULFILLMENT_FAILED", `V2 fulfill failed: ${(err as Error).message}`, true, err);
+  }
+
+  const body = await res.json() as Record<string, unknown>;
+
+  if (!res.ok) {
+    const retryable = res.status === 402 || res.status >= 500;
+    const msg = typeof body["error"] === "string" ? body["error"] : `HTTP ${res.status}`;
+    throw new BudgetRailError("FULFILLMENT_FAILED", msg, retryable);
+  }
+
+  return { result: body["result"], payment: (body["payment"] as Record<string, unknown>) ?? {} };
+}
+
+function classifyRevertV2(msg: string): BudgetRailError["code"] {
+  if (/NotAgent/i.test(msg))             return "NOT_AGENT";
+  if (/NotOwner/i.test(msg))             return "NOT_OWNER";
+  if (/SessionAlreadyClosed/i.test(msg)) return "SESSION_CLOSED";
+  if (/SessionExpired/i.test(msg))       return "SESSION_EXPIRED";
+  if (/RequestAlreadyPaid/i.test(msg))   return "DUPLICATE_REQUEST";
+  if (/InvalidSignature/i.test(msg))     return "INVALID_SIGNATURE";
+  if (/InvalidFeeAmount/i.test(msg))     return "PROVIDER_MISMATCH";
+  if (/QuoteExpired/i.test(msg))         return "QUOTE_EXPIRED";
+  if (/PerPaymentCap/i.test(msg))        return "PER_PAYMENT_CAP_EXCEEDED";
+  if (/LifetimeBudget|FundedBudget/i.test(msg)) return "BUDGET_EXCEEDED";
   if (/ZeroAddress/i.test(msg))          return "ZERO_ADDRESS";
   return "SIMULATION_FAILED";
 }

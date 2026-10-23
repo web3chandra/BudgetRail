@@ -113,3 +113,115 @@ export function generateRequestId(): `0x${string}` {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   return `0x${Buffer.from(bytes).toString("hex")}` as `0x${string}`;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// V2 EIP-712 support
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * V2 quote typed data.
+ * Fields MUST match BudgetRailV2.sol _PAYMENT_QUOTE_V2_TYPEHASH exactly.
+ * DO NOT add, remove or reorder fields without updating the contract typehash.
+ */
+export interface PaymentQuoteV2 {
+  sessionId:   bigint;
+  requestId:   `0x${string}`; // bytes32
+  baseAmount:  bigint;
+  feeAmount:   bigint;
+  grossAmount: bigint;
+  deadline:    bigint;        // uint64 stored as bigint
+  provider:    `0x${string}`; // provider C — locked in signed data
+  treasury:    `0x${string}`; // treasury E — prevents fee redirection
+}
+
+export interface SignedQuoteV2 extends PaymentQuoteV2 {
+  signature:          `0x${string}`;
+  chainId:            number;
+  contractAddress:    `0x${string}`;
+  quoteSignerAddress: `0x${string}`;
+  service:            "document-insights-v1";
+  /** SHA-256(input) — binds the quote to the exact paid input.
+   *  Required in /api/fulfill/v2 to verify input integrity (H-04 fix). */
+  requestHash:        `0x${string}`;
+  /** Human-readable breakdown, e.g. "$0.050000 + $0.000250 fee = $0.050250" */
+  displayPrice:       string;
+  /** version tag so callers can distinguish V1 from V2 quotes */
+  version:            "2";
+}
+
+/** EIP-712 domain for BudgetRailV2 — version MUST be "2". */
+export function buildDomainV2(chainId: number, contractAddress: `0x${string}`) {
+  return {
+    name:              "BudgetRail" as const,
+    version:           "2" as const,
+    chainId,
+    verifyingContract: contractAddress,
+  };
+}
+
+/** Field order MUST match BudgetRailV2.sol typehash. */
+export const PAYMENT_QUOTE_V2_TYPES = {
+  PaymentQuoteV2: [
+    { name: "sessionId",   type: "uint256" },
+    { name: "requestId",   type: "bytes32" },
+    { name: "baseAmount",  type: "uint256" },
+    { name: "feeAmount",   type: "uint256" },
+    { name: "grossAmount", type: "uint256" },
+    { name: "deadline",    type: "uint256" },
+    { name: "provider",    type: "address" },
+    { name: "treasury",    type: "address" },
+  ],
+} as const;
+
+/**
+ * Compute V2 fee split from baseAmount using exact integer math.
+ * Matches BudgetRailV2.sol: feeAmount = floor(baseAmount * 50 / 10_000).
+ * grossAmount = baseAmount + feeAmount.
+ * NEVER uses floating point for authorization calculations.
+ */
+export function computeV2Fee(baseAmount: bigint): { feeAmount: bigint; grossAmount: bigint } {
+  const feeAmount   = (baseAmount * 50n) / 10_000n;
+  const grossAmount = baseAmount + feeAmount;
+  return { feeAmount, grossAmount };
+}
+
+/**
+ * Sign a V2 EIP-712 PaymentQuoteV2.
+ * Private key is used in-process ONLY and never returned or logged.
+ */
+export async function signQuoteV2(
+  config: Config,
+  v2ContractAddress: `0x${string}`,
+  quote: PaymentQuoteV2,
+): Promise<`0x${string}`> {
+  const account = privateKeyToAccount(config.quoteSignerPrivateKey);
+  const domain  = buildDomainV2(config.chainId, v2ContractAddress);
+
+  const walletClient = createWalletClient({
+    account,
+    transport: http(config.rpcUrl),
+  });
+
+  return walletClient.signTypedData({
+    account,
+    domain,
+    types: PAYMENT_QUOTE_V2_TYPES,
+    primaryType: "PaymentQuoteV2",
+    message: {
+      sessionId:   quote.sessionId,
+      requestId:   quote.requestId,
+      baseAmount:  quote.baseAmount,
+      feeAmount:   quote.feeAmount,
+      grossAmount: quote.grossAmount,
+      deadline:    quote.deadline,
+      provider:    quote.provider,
+      treasury:    quote.treasury,
+    },
+  });
+}
+
+/** Format a human-readable V2 price breakdown. */
+export function formatV2DisplayPrice(baseAmount: bigint, feeAmount: bigint, grossAmount: bigint): string {
+  const fmt = (u: bigint) => `$${(Number(u) / 1_000_000).toFixed(6)} USDC`;
+  return `${fmt(baseAmount)} base + ${fmt(feeAmount)} platform fee = ${fmt(grossAmount)} total`;
+}

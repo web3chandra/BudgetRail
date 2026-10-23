@@ -94,20 +94,24 @@ bun run dev
 ### 5. Run provider API
 
 ```bash
-# Set env vars (see .env.example for names)
-QUOTE_SIGNER_PRIVATE_KEY=0x... \
-PROVIDER_PAYOUT_ADDRESS=0x... \
-PROVIDER_NETWORK=testnet \
-bun run provider/src/index.ts
+# Set env vars in provider/.env (copy from env.example.txt)
+# NEVER paste private keys directly into shell commands — they end up in shell history.
+# provider/.env should contain:
+#   QUOTE_SIGNER_PRIVATE_KEY=0x<your-key>
+#   PROVIDER_PAYOUT_ADDRESS=0x<wallet-C-address>
+#   PROVIDER_NETWORK=testnet
+#   ALLOWED_ORIGIN=https://arc-budgetrail.vercel.app   # or http://localhost:5173 for local dev
+cd provider && bun run src/index.ts
 # API: http://localhost:3001
 ```
 
 ### 6. Run agent CLI demo
 
 ```bash
-AGENT_PRIVATE_KEY=0x... \
-PROVIDER_API_URL=http://localhost:3001 \
-BUDGET_RAIL_ADDRESS=0xf6a13df15ad93c2e2968e1d69c53894a923bda21 \
+# Set env vars in agent/agent.env (gitignored)
+#   AGENT_PRIVATE_KEY=0x<your-agent-wallet-key>
+#   PROVIDER_API_URL=http://localhost:3001
+#   BUDGET_RAIL_ADDRESS=0xf6a13df15ad93c2e2968e1d69c53894a923bda21
 bun run agent:demo -- --session 1 --text "Hello world"
 ```
 

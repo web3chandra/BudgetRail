@@ -1,0 +1,23 @@
+{
+  "name": "budgetrail-agent-app-example",
+  "version": "0.1.0",
+  "description": "Example AI agent app integrating BudgetRail V1 and V2 via the SDK. NOT published to npm.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start":    "bun run src/main.ts",
+    "simulate": "bun run src/main.ts --simulate",
+    "test":     "bun test src/"
+  },
+  "dependencies": {
+    "@budgetrail/sdk": "workspace:../../packages/sdk",
+    "viem": ">=2.0.0"
+  },
+  "_note": [
+    "This example uses the SDK's public API surface — it imports only from @budgetrail/sdk,",
+    "never directly from contract ABI files or internal provider code.",
+    "The SDK itself is NOT yet published to npm (see packages/sdk/package.json).",
+    "To run: cd examples/agent-app && bun install && bun run simulate",
+    "For real onchain tests: set AGENT_PRIVATE_KEY in env and run bun run start -- --confirm"
+  ]
+}

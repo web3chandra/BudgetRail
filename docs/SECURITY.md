@@ -31,6 +31,11 @@
 - Mitigation: Key D is read only from environment variable; never logged, never returned by API, never committed. Rotate the key and update `session.quoteSigner` (requires creating a new session). Use a hardware security module or secrets manager in production.
 - Status: ACKNOWLEDGED. Operational — not a contract bug.
 
+**H3 — Treasury E and Provider C share the same address (V2 immutable risk)**
+- Both `VITE_TREASURY_ADDRESS` (E) and `VITE_PROVIDER_PAYOUT` (C) are currently set to `0x7D76349B806148594b8075A83b2f8fb12feaA743`. The V2 treasury address is **immutable** in the contract — it cannot be changed after deployment. If V2 is deployed with C=E, fee routing cannot be separated without a new contract deployment.
+- **Action required before V2 mainnet deploy:** Confirm whether C=E is intentional (document it), or generate a separate treasury wallet and verify its ownership before deploying BudgetRailV2.sol. A signed-nonce proof of treasury wallet ownership should be recorded in `evidence/mainnet.json`.
+- Status: OPEN — operator decision required before V2 deploy.
+
 ### MEDIUM
 
 **M1 — Block-timestamp manipulation at expiry boundary**

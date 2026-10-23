@@ -5,9 +5,13 @@
  */
 
 import { createPublicClient, http, decodeEventLog, type Log } from "viem";
-import { BUDGET_RAIL_ABI, DEPLOY_BLOCK_TESTNET } from "./abi.js";
+import { BUDGET_RAIL_ABI, BUDGET_RAIL_V2_ABI, DEPLOY_BLOCK_TESTNET } from "./abi.js";
 import { BudgetRailError, IncompleteHistoryError } from "./types.js";
-import type { BudgetRailConfig, Session, PaymentSettledEvent, CoverageMetadata, FailedRange } from "./types.js";
+import type {
+  BudgetRailConfig, BudgetRailV2Config, Session,
+  PaymentSettledEvent, PaymentSettledV2Event,
+  CoverageMetadata, FailedRange,
+} from "./types.js";
 
 /** Backoff base for window retries (ms). */
 const SDK_BACKOFF_MS  = 800;
@@ -277,6 +281,190 @@ export async function scanPaymentSettledEvents(
       `Scan incomplete: ${failed.length} window(s) failed after retries. ` +
       `Partial results (${results.length} events) available via error.partialResults.`,
       results,
+      coverage,
+    );
+  }
+
+  return {
+    events:   results.sort((a, b) => (a.blockNumber < b.blockNumber ? -1 : 1)),
+    coverage,
+  };
+}
+
+// ── V2 read functions ──────────────────────────────────────────────────────
+
+/**
+ * Read a V2 session. Uses the V2 contract address from config.
+ * Returns null when sessionId does not exist.
+ */
+export async function readSessionV2(
+  config: BudgetRailV2Config,
+  sessionId: bigint,
+): Promise<Session | null> {
+  const client = makeClient(config);
+  try {
+    const raw = await client.readContract({
+      address: config.v2ContractAddress,
+      abi:     BUDGET_RAIL_V2_ABI,
+      functionName: "getSession",
+      args: [sessionId],
+    }) as {
+      owner: `0x${string}`; agent: `0x${string}`; provider: `0x${string}`;
+      quoteSigner: `0x${string}`; maxBudget: bigint; perPaymentCap: bigint;
+      totalFunded: bigint; totalSpent: bigint; expiresAt: bigint; closed: boolean;
+    };
+    if (raw.owner === "0x0000000000000000000000000000000000000000") return null;
+    return {
+      id: sessionId,
+      owner:          raw.owner.toLowerCase()       as `0x${string}`,
+      agent:          raw.agent.toLowerCase()       as `0x${string}`,
+      provider:       raw.provider.toLowerCase()    as `0x${string}`,
+      quoteSigner:    raw.quoteSigner.toLowerCase() as `0x${string}`,
+      maxBudget:      raw.maxBudget,
+      perPaymentCap:  raw.perPaymentCap,
+      totalFunded:    raw.totalFunded,
+      totalSpent:     raw.totalSpent,
+      expiresAt:      raw.expiresAt,
+      closed:         raw.closed,
+      availableBalance: raw.totalFunded > raw.totalSpent ? raw.totalFunded - raw.totalSpent : 0n,
+      topUpHeadroom:    raw.maxBudget  > raw.totalFunded ? raw.maxBudget  - raw.totalFunded : 0n,
+    };
+  } catch (err) {
+    throw new BudgetRailError("SESSION_NOT_FOUND", `V2 readSession(${sessionId}) failed: ${(err as Error).message}`, true, err);
+  }
+}
+
+/**
+ * Verify the V2 contract's immutable TREASURY matches config.
+ * Call at startup to catch misconfiguration early.
+ */
+export async function verifyV2Treasury(
+  config: BudgetRailV2Config,
+): Promise<void> {
+  const client = makeClient(config);
+  const onchain = (await client.readContract({
+    address:      config.v2ContractAddress,
+    abi:          BUDGET_RAIL_V2_ABI,
+    functionName: "TREASURY",
+    args:         [],
+  })) as `0x${string}`;
+
+  if (onchain.toLowerCase() !== config.treasuryAddress.toLowerCase()) {
+    throw new BudgetRailError(
+      "PROVIDER_MISMATCH",
+      `V2 TREASURY onchain=${onchain} does not match config.treasuryAddress=${config.treasuryAddress}`,
+    );
+  }
+}
+
+/**
+ * Decode a raw log into a PaymentSettledV2Event.
+ * Returns null when the log is not a V2 PaymentSettledV2 event from the V2 contract.
+ * Does NOT accept V1 PaymentSettled events — ABIs are kept separate.
+ */
+export function decodePaymentSettledV2Log(
+  log: Log,
+  v2ContractAddress: `0x${string}`,
+): PaymentSettledV2Event | null {
+  if (log.address.toLowerCase() !== v2ContractAddress.toLowerCase()) return null;
+  try {
+    const decoded = decodeEventLog({
+      abi:       BUDGET_RAIL_V2_ABI,
+      eventName: "PaymentSettledV2",
+      data:      log.data,
+      topics:    log.topics,
+    });
+    const args = decoded.args as {
+      sessionId: bigint; requestId: `0x${string}`; provider: `0x${string}`;
+      treasury: `0x${string}`; requestHash: `0x${string}`; agent: `0x${string}`;
+      baseAmount: bigint; feeAmount: bigint; grossAmount: bigint; quoteDeadline: bigint;
+    };
+    return {
+      sessionId:     args.sessionId,
+      requestId:     args.requestId.toLowerCase()   as `0x${string}`,
+      provider:      args.provider.toLowerCase()    as `0x${string}`,
+      treasury:      args.treasury.toLowerCase()    as `0x${string}`,
+      requestHash:   args.requestHash.toLowerCase() as `0x${string}`,
+      agent:         args.agent.toLowerCase()       as `0x${string}`,
+      baseAmount:    args.baseAmount,
+      feeAmount:     args.feeAmount,
+      grossAmount:   args.grossAmount,
+      quoteDeadline: args.quoteDeadline,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export interface ScannedPaymentV2 extends PaymentSettledV2Event {
+  txHash: `0x${string}`;
+  blockNumber: bigint;
+}
+
+/**
+ * Scan for PaymentSettledV2 events from the V2 contract.
+ * Uses the same retry/backoff/dedup logic as scanPaymentSettledEvents.
+ * V1 and V2 events are kept strictly separate — never decode one as the other.
+ */
+export async function scanPaymentSettledV2Events(
+  config: BudgetRailV2Config,
+  opts?: ScanOptions,
+): Promise<{ events: ScannedPaymentV2[]; coverage: CoverageMetadata }> {
+  const client     = makeClient(config);
+  const windowSize = opts?.windowSize ?? 5000n;
+  const fromBlock  = opts?.fromBlock  ?? config.v2DeployBlock;
+  const head       = await client.getBlockNumber();
+  const toBlock    = opts?.toBlock !== undefined && opts.toBlock < head ? opts.toBlock : head;
+
+  const seen    = new Set<string>();
+  const results: ScannedPaymentV2[] = [];
+  const failed:  FailedRange[]      = [];
+
+  for (let start = fromBlock; start <= toBlock; start += windowSize + 1n) {
+    const end = start + windowSize > toBlock ? toBlock : start + windowSize;
+    let attempt = 0;
+    let lastErr  = "";
+    let succeeded = false;
+
+    while (attempt < SDK_MAX_RETRIES) {
+      try {
+        const logs = await client.getLogs({
+          address:   config.v2ContractAddress,
+          fromBlock: start,
+          toBlock:   end,
+        });
+        for (const log of logs) {
+          const decoded = decodePaymentSettledV2Log(log as Log, config.v2ContractAddress);
+          if (!decoded) continue;
+          const key = `${log.transactionHash ?? ""}-${log.logIndex ?? 0}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          results.push({
+            ...decoded,
+            txHash:      (log.transactionHash ?? "0x") as `0x${string}`,
+            blockNumber: log.blockNumber ?? 0n,
+          });
+        }
+        succeeded = true;
+        break;
+      } catch (e) {
+        lastErr = (e as Error).message;
+        attempt++;
+        if (attempt < SDK_MAX_RETRIES) {
+          await new Promise((r) => setTimeout(r, SDK_BACKOFF_MS * Math.pow(2, attempt - 1)));
+        }
+      }
+    }
+    if (!succeeded) failed.push({ fromBlock: start, toBlock: end, error: lastErr });
+  }
+
+  const isComplete = failed.length === 0 && fromBlock <= config.v2DeployBlock;
+  const coverage: CoverageMetadata = { scannedFrom: fromBlock, scannedTo: toBlock, chainHead: head, isComplete, failedRanges: failed };
+
+  if (failed.length > 0) {
+    throw new IncompleteHistoryError(
+      `V2 scan incomplete: ${failed.length} window(s) failed. Partial results (${results.length} events) in error.partialResults.`,
+      results as unknown as import("./read.js").ScannedPayment[],
       coverage,
     );
   }

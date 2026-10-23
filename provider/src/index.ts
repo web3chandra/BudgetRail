@@ -14,6 +14,8 @@ import { loadConfig } from "./lib/config.js";
 import { handleHealth } from "./routes/health.js";
 import { handleQuotes } from "./routes/quotes.js";
 import { handleFulfill } from "./routes/fulfill.js";
+import { handleQuotesV2 } from "./routes/quotesV2.js";
+import { handleFulfillV2 } from "./routes/fulfillV2.js";
 
 // Load and validate config at startup — fail fast on missing secrets
 let config: ReturnType<typeof loadConfig>;
@@ -38,7 +40,7 @@ Bun.serve({
     if (req.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
-        headers: corsHeaders(),
+        headers: corsHeaders(config.allowedOrigin),
       });
     }
 
@@ -51,6 +53,10 @@ Bun.serve({
         response = await handleQuotes(config, req);
       } else if (req.method === "POST" && url.pathname === "/api/fulfill") {
         response = await handleFulfill(config, req);
+      } else if (req.method === "POST" && url.pathname === "/api/quotes/v2") {
+        response = await handleQuotesV2(config, req);
+      } else if (req.method === "POST" && url.pathname === "/api/fulfill/v2") {
+        response = await handleFulfillV2(config, req);
       } else {
         response = new Response(JSON.stringify({ error: "Not found" }), {
           status: 404,
@@ -67,7 +73,7 @@ Bun.serve({
 
     // Attach CORS headers to every response
     const headers = new Headers(response.headers);
-    for (const [k, v] of Object.entries(corsHeaders())) {
+    for (const [k, v] of Object.entries(corsHeaders(config.allowedOrigin))) {
       headers.set(k, v);
     }
     return new Response(response.body, {
@@ -77,9 +83,16 @@ Bun.serve({
   },
 });
 
-function corsHeaders(): Record<string, string> {
+function corsHeaders(allowedOrigin: string): Record<string, string> {
+  // Production: set ALLOWED_ORIGIN=https://arc-budgetrail.vercel.app
+  // Development: defaults to "*" (local only — do not use "*" in production)
+  if (allowedOrigin !== "*") {
+    console.log(`[BudgetRail provider] CORS restricted to: ${allowedOrigin}`);
+  } else if (config.network === "mainnet") {
+    console.warn("[BudgetRail provider] WARNING: CORS is open (*) on mainnet. Set ALLOWED_ORIGIN.");
+  }
   return {
-    "Access-Control-Allow-Origin":  "*",
+    "Access-Control-Allow-Origin":  allowedOrigin,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
   };

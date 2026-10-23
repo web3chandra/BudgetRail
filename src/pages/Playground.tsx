@@ -33,6 +33,7 @@ import { arcTestnet } from "viem/chains";
 import { Info, AlertTriangle, Copy, CheckCircle2, ChevronDown, ChevronUp, RotateCcw } from "lucide-react";
 
 import { BUDGET_RAIL_ABI, BUDGET_RAIL_ADDRESS, PROVIDER_API_URL, PROVIDER_CONFIGURED, providerConfigError } from "@/lib/budgetRail";
+import { VersionBanner } from "@/components/VersionBanner";
 import { formatUsdcShort, formatAddr, formatTs, sessionStatus } from "@/lib/format";
 import { parseOnchainError } from "@/lib/parseOnchainError";
 import { NetworkGuard } from "@/components/NetworkGuard";
@@ -94,7 +95,7 @@ interface SignedQuote {
   sessionId:          string;
   requestId:          string;
   requestHash:        string;
-  amount:             string;
+  amount:             string;      // V1: gross; V2: gross (= base + fee)
   quoteDeadline:      string;
   signature:          `0x${string}`;
   chainId:            number;
@@ -103,6 +104,12 @@ interface SignedQuote {
   quoteSignerAddress: `0x${string}`;
   service:            string;
   displayPrice:       string;
+  // V2-only fields (absent on V1 quotes)
+  version?:           string;      // "2" for V2 quotes
+  baseAmount?:        string;      // provider C receives
+  feeAmount?:         string;      // treasury E receives
+  grossAmount?:       string;      // session debited
+  treasury?:          `0x${string}`; // treasury E address from signed data
 }
 
 interface DocumentResult {
@@ -379,7 +386,7 @@ export function Playground() {
 
     // Move to fulfilling — this triggers the fulfill useEffect below
     setFlow(f => ({ ...f, stage: "fulfilling" }));
-  }, [isReceiptSuccess, receipt, flow.stage, flow.hash, flow.quote, inputText]);
+  }, [isReceiptSuccess, receipt, flow.stage, flow.hash, flow.quote, inputText, payHashRaw]);
 
   // Auto-trigger fulfill when stage becomes "fulfilling".
   // fulfillInFlight prevents a double-call when handleRetryFulfill also sets stage→fulfilling.
@@ -651,6 +658,9 @@ export function Playground() {
           Payment is verified onchain before any result is delivered.
         </p>
       </div>
+
+      {/* Version + network banner */}
+      <VersionBanner version="V1" className="mb-2" />
 
       {/* How it works */}
       <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] overflow-hidden">
@@ -929,10 +939,28 @@ export function Playground() {
                       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
                         <span className="text-[var(--subtle)]">Service</span>
                         <span className="text-[var(--muted)]">{flow.quote.service}</span>
-                        <span className="text-[var(--subtle)]">USDC charge</span>
-                        <span className="font-bold text-[var(--success)] tabular text-sm">
-                          {formatUsdcShort(BigInt(flow.quote.amount))}
-                        </span>
+
+                        {/* V2: show base/fee/gross breakdown */}
+                        {flow.quote.version === "2" && flow.quote.baseAmount && flow.quote.feeAmount ? (
+                          <>
+                            <span className="text-[var(--subtle)]">Provider base (C)</span>
+                            <span className="tabular text-[var(--muted)]">{formatUsdcShort(BigInt(flow.quote.baseAmount))}</span>
+                            <span className="text-[var(--subtle)]">Platform fee 0.5% (E)</span>
+                            <span className="tabular text-[var(--muted)]">{formatUsdcShort(BigInt(flow.quote.feeAmount))}</span>
+                            <span className="text-[var(--subtle)]">Gross charged from session</span>
+                            <span className="font-bold text-[var(--success)] tabular text-sm">
+                              {formatUsdcShort(BigInt(flow.quote.amount))}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-[var(--subtle)]">USDC charge (V1 — no fee)</span>
+                            <span className="font-bold text-[var(--success)] tabular text-sm">
+                              {formatUsdcShort(BigInt(flow.quote.amount))}
+                            </span>
+                          </>
+                        )}
+
                         <span className="text-[var(--subtle)]">Provider receives</span>
                         <span className="mono text-[var(--muted)]">{formatAddr(flow.quote.providerPayout)}</span>
                         <span className="text-[var(--subtle)]">Quote valid until</span>
@@ -996,8 +1024,23 @@ export function Playground() {
                       <p className="font-semibold text-[var(--success)] text-sm">Payment verified + result delivered</p>
                       <TxLink hash={flow.payment.txHash} label="View settled transaction" />
                       <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-                        <span className="text-[var(--subtle)]">USDC paid</span>
+                        <span className="text-[var(--subtle)]">USDC paid (gross)</span>
                         <span className="tabular font-semibold">{flow.payment.amountUsdc}</span>
+                        {/* V2 split — show base/fee if available */}
+                        {flow.quote?.version === "2" && flow.quote.baseAmount && flow.quote.feeAmount && (
+                          <>
+                            <span className="text-[var(--subtle)] pl-3">Provider C received</span>
+                            <span className="tabular">{formatUsdcShort(BigInt(flow.quote.baseAmount))}</span>
+                            <span className="text-[var(--subtle)] pl-3">Treasury E fee</span>
+                            <span className="tabular">{formatUsdcShort(BigInt(flow.quote.feeAmount))}</span>
+                          </>
+                        )}
+                        {flow.quote?.version !== "2" && (
+                          <>
+                            <span className="text-[var(--subtle)] pl-3">V1 — fee</span>
+                            <span className="tabular text-[var(--subtle)]">$0.000000 (no V1 fee)</span>
+                          </>
+                        )}
                         <span className="text-[var(--subtle)]">Session</span>
                         <span className="tabular">#{flow.payment.sessionId}</span>
                         <span className="text-[var(--subtle)]">Block</span>

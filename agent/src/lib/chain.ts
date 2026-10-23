@@ -298,6 +298,197 @@ export async function waitForReceipt(
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// V2 chain helpers — BudgetRailV2.payForRequestV2
+// ═══════════════════════════════════════════════════════════════════════════
+
+const BUDGET_RAIL_V2_ABI = parseAbi([
+  "function getSession(uint256 sessionId) view returns ((address owner,address agent,address provider,address quoteSigner,uint256 maxBudget,uint256 perPaymentCap,uint256 totalFunded,uint256 totalSpent,uint64 expiresAt,bool closed))",
+  "function availableBalance(uint256 sessionId) view returns (uint256)",
+  "function TREASURY() view returns (address)",
+  "function FEE_BPS() view returns (uint256)",
+  "function payForRequestV2(uint256 sessionId,uint256 baseAmount,uint256 feeAmount,bytes32 requestId,uint64 deadline,bytes signature) nonpayable",
+  "event PaymentSettledV2(uint256 indexed sessionId,bytes32 indexed requestId,address indexed agent,address provider,address treasury,uint256 baseAmount,uint256 feeAmount,uint256 grossAmount,uint256 remainingBalance)",
+]);
+
+/** Read a V2 session. contractAddress must be the V2 contract. */
+export async function readSessionV2(
+  client: PublicClient,
+  contractAddress: `0x${string}`,
+  sessionId: bigint,
+): Promise<OnchainSession> {
+  const raw = await client.readContract({
+    address: contractAddress,
+    abi: BUDGET_RAIL_V2_ABI,
+    functionName: "getSession",
+    args: [sessionId],
+  }) as {
+    owner: `0x${string}`; agent: `0x${string}`; provider: `0x${string}`;
+    quoteSigner: `0x${string}`; maxBudget: bigint; perPaymentCap: bigint;
+    totalFunded: bigint; totalSpent: bigint; expiresAt: bigint; closed: boolean;
+  };
+  return {
+    owner:         raw.owner.toLowerCase() as `0x${string}`,
+    agent:         raw.agent.toLowerCase() as `0x${string}`,
+    provider:      raw.provider.toLowerCase() as `0x${string}`,
+    quoteSigner:   raw.quoteSigner.toLowerCase() as `0x${string}`,
+    maxBudget:     raw.maxBudget,
+    perPaymentCap: raw.perPaymentCap,
+    totalFunded:   raw.totalFunded,
+    totalSpent:    raw.totalSpent,
+    expiresAt:     raw.expiresAt,
+    closed:        raw.closed,
+  };
+}
+
+/** Read the TREASURY immutable from V2 contract. */
+export async function readV2Treasury(
+  client: PublicClient,
+  contractAddress: `0x${string}`,
+): Promise<`0x${string}`> {
+  const addr = await client.readContract({
+    address: contractAddress,
+    abi: BUDGET_RAIL_V2_ABI,
+    functionName: "TREASURY",
+    args: [],
+  }) as `0x${string}`;
+  return addr.toLowerCase() as `0x${string}`;
+}
+
+/** Pre-flight checks for a V2 payment. grossAmount is base + fee. */
+export async function verifySessionPreFlightV2(
+  client: PublicClient,
+  contractAddress: `0x${string}`,
+  config: AgentConfig,
+  sessionId: bigint,
+  agentAddress: `0x${string}`,
+  grossAmount: bigint,
+  expectedTreasury: `0x${string}`,
+): Promise<SessionChecks & { treasury: `0x${string}`; feeBps: bigint }> {
+  const now = BigInt(Math.floor(Date.now() / 1000));
+
+  const [session, availableBalance, usdcBalance, nativeBalance, treasury, feeBps] = await Promise.all([
+    readSessionV2(client, contractAddress, sessionId),
+    client.readContract({ address: contractAddress, abi: BUDGET_RAIL_V2_ABI, functionName: "availableBalance", args: [sessionId] }) as Promise<bigint>,
+    readUsdcBalance(client, agentAddress),
+    readNativeBalance(client, agentAddress),
+    readV2Treasury(client, contractAddress),
+    client.readContract({ address: contractAddress, abi: BUDGET_RAIL_V2_ABI, functionName: "FEE_BPS", args: [] }) as Promise<bigint>,
+  ]);
+
+  if (session.owner === "0x0000000000000000000000000000000000000000")
+    throw new Error(`V2 session ${sessionId} does not exist on ${config.network}`);
+  if (session.agent !== agentAddress)
+    throw new Error(`Wrong wallet: V2 session ${sessionId} agent is ${session.agent}, but this key controls ${agentAddress}`);
+  if (session.closed)
+    throw new Error(`V2 session ${sessionId} is closed`);
+  if (session.expiresAt < now)
+    throw new Error(`V2 session ${sessionId} expired ${Number(now - session.expiresAt)}s ago`);
+  if (session.provider !== config.providerPayoutAddress)
+    throw new Error(`V2 provider mismatch: session has ${session.provider}, expected ${config.providerPayoutAddress}`);
+  if (session.quoteSigner !== config.quoteSignerAddress)
+    throw new Error(`V2 signer mismatch: session has ${session.quoteSigner}, expected ${config.quoteSignerAddress}`);
+  if (treasury.toLowerCase() !== expectedTreasury.toLowerCase())
+    throw new Error(`V2 treasury mismatch: contract has ${treasury}, expected ${expectedTreasury}. Fee would go to wrong address.`);
+  if (grossAmount > session.perPaymentCap)
+    throw new Error(`V2 grossAmount ${grossAmount} exceeds perPaymentCap ${session.perPaymentCap}`);
+  if (grossAmount > availableBalance)
+    throw new Error(`Insufficient V2 funded balance: need ${grossAmount} gross, available ${availableBalance}`);
+  if (nativeBalance < MIN_GAS_NATIVE_UNITS)
+    throw new Error(`Insufficient native USDC for gas: have ${nativeBalance} (18-dec), need at least ${MIN_GAS_NATIVE_UNITS}`);
+
+  return { session, availableBalance, usdcBalance, nativeBalance, agentAddress, treasury, feeBps };
+}
+
+/** Estimate gas for payForRequestV2. */
+export async function estimatePayForRequestV2Gas(
+  client: PublicClient,
+  contractAddress: `0x${string}`,
+  agentAddress: `0x${string}`,
+  sessionId: bigint,
+  baseAmount: bigint,
+  feeAmount: bigint,
+  requestId: `0x${string}`,
+  deadline: bigint,
+  signature: `0x${string}`,
+): Promise<bigint> {
+  return client.estimateContractGas({
+    address: contractAddress,
+    abi: BUDGET_RAIL_V2_ABI,
+    functionName: "payForRequestV2",
+    args: [sessionId, baseAmount, feeAmount, requestId, deadline, signature],
+    account: agentAddress,
+  });
+}
+
+/** Submit payForRequestV2 from agent wallet. */
+export async function submitPayForRequestV2(
+  walletClient: WalletClient,
+  contractAddress: `0x${string}`,
+  sessionId: bigint,
+  baseAmount: bigint,
+  feeAmount: bigint,
+  requestId: `0x${string}`,
+  deadline: bigint,
+  signature: `0x${string}`,
+): Promise<Hash> {
+  const account = (walletClient as unknown as { account: { address: `0x${string}` } }).account;
+  return walletClient.writeContract({
+    address: contractAddress,
+    abi: BUDGET_RAIL_V2_ABI,
+    functionName: "payForRequestV2",
+    args: [sessionId, baseAmount, feeAmount, requestId, deadline, signature],
+    account: account as `0x${string}`,
+    chain: null,
+  } as Parameters<typeof walletClient.writeContract>[0]) as Promise<Hash>;
+}
+
+export interface SettledV2Event {
+  sessionId:        bigint;
+  requestId:        `0x${string}`;
+  agent:            `0x${string}`;
+  provider:         `0x${string}`;
+  treasury:         `0x${string}`;
+  baseAmount:       bigint;
+  feeAmount:        bigint;
+  grossAmount:      bigint;
+  remainingBalance: bigint;
+}
+
+/** Find and decode a PaymentSettledV2 log in a receipt. */
+export function findPaymentSettledV2Log(
+  receipt: TransactionReceipt,
+  contractAddress: `0x${string}`,
+  requestId: `0x${string}`,
+): SettledV2Event | null {
+  for (const log of receipt.logs) {
+    if (log.address.toLowerCase() !== contractAddress.toLowerCase()) continue;
+    try {
+      const decoded = decodeEventLog({
+        abi: BUDGET_RAIL_V2_ABI,
+        data: log.data,
+        topics: log.topics,
+      }) as { eventName: string; args: Record<string, unknown> };
+      if (decoded.eventName === "PaymentSettledV2" &&
+          (decoded.args.requestId as string).toLowerCase() === requestId.toLowerCase()) {
+        const a = decoded.args;
+        return {
+          sessionId:        a.sessionId as bigint,
+          requestId:        (a.requestId as string).toLowerCase() as `0x${string}`,
+          agent:            (a.agent as string).toLowerCase() as `0x${string}`,
+          provider:         (a.provider as string).toLowerCase() as `0x${string}`,
+          treasury:         (a.treasury as string).toLowerCase() as `0x${string}`,
+          baseAmount:       a.baseAmount as bigint,
+          feeAmount:        a.feeAmount as bigint,
+          grossAmount:      a.grossAmount as bigint,
+          remainingBalance: a.remainingBalance as bigint,
+        };
+      }
+    } catch { /* wrong event */ }
+  }
+  return null;
+}
+
 // ── PaymentSettled log verification ───────────────────────────────────────
 
 export interface SettledEvent {

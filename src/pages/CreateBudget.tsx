@@ -11,7 +11,7 @@ import { useNavigate } from "react-router-dom";
 import { useAccount, useReadContract, useSwitchChain } from "wagmi";
 import { erc20Abi } from "viem";
 import { arcTestnet } from "viem/chains";
-import { AlertTriangle, Users } from "lucide-react";
+import { AlertTriangle, Users, Info } from "lucide-react";
 import { getUsdc } from "@/onchain-facts";
 import {
   BUDGET_RAIL_ADDRESS,
@@ -32,6 +32,9 @@ import { TransactionStepper, type Step } from "@/components/TransactionStepper";
 import { TxLink } from "@/components/ExplorerLink";
 import { ErrorBanner, ConfirmModal } from "@/components/shared";
 import { WalletRolePanel } from "@/components/WalletRolePanel";
+import { VersionBanner } from "@/components/VersionBanner";
+import { V2_CONFIGURED } from "@/lib/budgetRail";
+import { computeFeeV2 } from "@/lib/budgetRailV2";
 import { toast } from "sonner";
 
 const CHAIN_ID = arcTestnet.id;
@@ -219,6 +222,26 @@ export function CreateBudget() {
           Create a bounded USDC payment session for an authorized agent.
         </p>
       </div>
+
+      {/* Version + network banner */}
+      <VersionBanner version="V1" />
+
+      {/* V2 availability notice */}
+      {V2_CONFIGURED && (
+        <div className="rounded-xl border border-[rgba(141,216,159,0.25)] bg-[rgba(141,216,159,0.05)] px-4 py-3 flex items-start gap-2">
+          <Info size={13} className="shrink-0 text-[var(--success)] mt-0.5" />
+          <div className="space-y-0.5 text-xs">
+            <p className="font-semibold text-[var(--success)]">V2 contract is deployed</p>
+            <p className="text-[var(--muted)]">
+              V2 sessions add a 0.5% platform fee on service purchases only.
+              For base $0.05: provider receives $0.050000, platform fee $0.000250, gross $0.050250.
+              Deposits, top-ups, and refunds have NO platform fee.
+              V1 sessions remain under V1 rules — no fee, no migration.
+              <strong className="text-[var(--ink-2)]"> This form creates a V1 session.</strong>
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Provider configuration warning */}
       {configErr && (
@@ -416,6 +439,8 @@ export function CreateBudget() {
                     const c = parseUsdcUnits(form.perPaymentCap) ?? 0n;
                     const f = parseUsdcUnits(form.fundAmount) ?? 0n;
                     const maxCalls = c > 0n ? b / c : 0n;
+                    // V2 gross for the current per-call cap
+                    const { grossAmount: grossCap, feeAmount: feeCap } = c > 0n ? computeFeeV2(c) : { grossAmount: 0n, feeAmount: 0n };
                     return (
                       <>
                         <p className="text-[var(--muted)]">
@@ -425,10 +450,18 @@ export function CreateBudget() {
                           Initial deposit: <strong>{formatUsdcShort(f)}</strong> — what you actually transfer now (step 3)
                         </p>
                         <p className="text-[var(--muted)]">
-                          Per-call cap: {formatUsdcShort(c)} × up to {maxCalls.toString()} calls
+                          Per-call cap: {formatUsdcShort(c)} × up to {maxCalls.toString()} calls (V1, no fee)
                         </p>
+                        {V2_CONFIGURED && c > 0n && (
+                          <p className="text-[var(--muted)]">
+                            If used with V2: per-call gross = {formatUsdcShort(grossCap)}
+                            {" "}({formatUsdcShort(c)} base + {formatUsdcShort(feeCap)} platform fee).
+                            Per-call cap must be &gt;= gross.
+                          </p>
+                        )}
                         <p className="text-[var(--subtle)] pt-1 border-t border-[var(--border)]">
-                          Max budget ≠ amount deposited. Only deposited funds can be spent. Owner can close and recover any unspent deposit at any time.
+                          Max budget and cap are gross-inclusive in V2 (covers base + fee).
+                          Only deposited funds can be spent. Owner can close and recover any unspent deposit at any time.
                         </p>
                       </>
                     );

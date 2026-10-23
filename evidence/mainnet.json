@@ -1,31 +1,176 @@
 {
-  "_note": "This file must contain only real on-chain data. NEVER fabricate tx hashes, addresses, block numbers, or timestamps. Populate after completing the mainnet deployment runbook in docs/DEPLOYMENT.md.",
-  "_status": "PLACEHOLDER — mainnet not yet deployed",
-  "chainId": null,
-  "chainName": null,
+  "_note": "This file must contain only real on-chain data. NEVER fabricate tx hashes, addresses, block numbers, or timestamps.",
+  "_status": "PLACEHOLDER — mainnet not yet deployed. All null fields must be populated from real explorer data after deployment.",
+  "chainId": 5042,
+  "chainName": "Arc Mainnet",
   "rpc": "https://rpc.mainnet.arc.io",
+  "explorer": "https://explorer.arc.io",
   "usdcErc20Address": "0x3600000000000000000000000000000000000000",
   "usdcErc20Decimals": 6,
   "usdcNativeGasDecimals": 18,
-  "contract": {
+  "usdcNote": "Native gas IS USDC on Arc — same pool, two decimal views (6 for ERC-20, 18 for native). Never double-count.",
+
+  "ownershipProofs": {
+    "_note": "Sign a canonical nonce on your own machine (never share private keys). Record address + signature only.",
+    "providerC": {
+      "address": null,
+      "nonceMessage": null,
+      "signature": null,
+      "provenAt": null
+    },
+    "treasuryE": {
+      "address": null,
+      "nonceMessage": null,
+      "signature": null,
+      "provenAt": null,
+      "WARNING": "Treasury E is IMMUTABLE in BudgetRailV2.sol — verify ownership BEFORE deploying V2. Cannot be changed post-deploy."
+    },
+    "cEqualsEDecision": {
+      "decision": null,
+      "decidedAt": null,
+      "note": "REQUIRED: state 'separate' (C != E) or 'combined-testnet-only' (C=E intentional for testnet). Must be 'separate' for mainnet."
+    }
+  },
+
+  "v1Contract": {
     "name": "BudgetRail",
     "address": null,
     "deployTxHash": null,
     "deployedAt": null,
     "explorerUrl": null,
     "explorerTxUrl": null,
-    "constructorArg_usdcAddress": "0x3600000000000000000000000000000000000000"
+    "constructorArgs": {
+      "usdcAddress": "0x3600000000000000000000000000000000000000"
+    },
+    "verified_FEE_BPS": "N/A (V1 has no platform fee)",
+    "verified_USDC_ADDRESS_onchain": null,
+    "verified_decimals_onchain": null
   },
+
+  "v2Contract": {
+    "name": "BudgetRailV2",
+    "address": null,
+    "deployTxHash": null,
+    "deployedAt": null,
+    "deployBlock": null,
+    "explorerUrl": null,
+    "explorerTxUrl": null,
+    "sourceHash": null,
+    "constructorArgs": {
+      "usdcAddress": "0x3600000000000000000000000000000000000000",
+      "treasury": null,
+      "providerHint": null
+    },
+    "verified_FEE_BPS_onchain": null,
+    "verified_FEE_DENOMINATOR_onchain": null,
+    "verified_VERSION_onchain": null,
+    "verified_USDC_ADDRESS_onchain": null,
+    "verified_TREASURY_onchain": null,
+    "verified_computeFee_50000": {
+      "fee": null,
+      "gross": null,
+      "expected_fee": 250,
+      "expected_gross": 50250
+    }
+  },
+
   "mainnetLifecycle": {
     "status": "PENDING_OPERATOR_APPROVAL",
+    "_note": "Execute after V2 deploy. Populate with REAL tx hashes only. Never fabricate.",
+    "version": "V2",
     "sessionId": null,
-    "createSessionTxHash": null,
-    "fundSessionTxHash": null,
-    "payment1TxHash": null,
-    "payment2TxHash": null,
-    "replayAttemptResult": null,
-    "closeSessionTxHash": null,
-    "finalOwnerBalanceDelta": null,
-    "finalProviderBalance": null
+
+    "step1_createSession": {
+      "txHash": null,
+      "explorerUrl": null,
+      "block": null,
+      "sessionId": null,
+      "ownerAddress": null,
+      "agentAddress": null,
+      "providerAddress": null,
+      "quoteSignerAddress": null,
+      "maxBudget_units": null,
+      "perPaymentCap_units": null,
+      "expiresAt": null
+    },
+
+    "step2_approveUsdc": {
+      "txHash": null,
+      "explorerUrl": null,
+      "amount_units": null
+    },
+
+    "step3_fundSession": {
+      "txHash": null,
+      "explorerUrl": null,
+      "amount_units": null,
+      "totalFunded_after": null
+    },
+
+    "step4_requestQuote": {
+      "baseAmount_units": null,
+      "feeAmount_units": null,
+      "grossAmount_units": null,
+      "feeBps": 50,
+      "providerAddress": null,
+      "treasuryAddress": null,
+      "requestId": null,
+      "quoteSignerVerified": null
+    },
+
+    "step5_payForRequest": {
+      "txHash": null,
+      "explorerUrl": null,
+      "block": null,
+      "PaymentSettledV2_baseAmount": null,
+      "PaymentSettledV2_feeAmount": null,
+      "PaymentSettledV2_grossAmount": null,
+      "Transfer_to_providerC_amount": null,
+      "Transfer_to_treasuryE_amount": null,
+      "session_totalSpent_after": null,
+      "session_availableBalance_after": null,
+      "pass_C_received_50000": null,
+      "pass_E_received_250": null,
+      "pass_gross_deducted_50250": null
+    },
+
+    "step6_fulfill": {
+      "resultType": null,
+      "resultDeliveredAfterPayment": null,
+      "requestHashVerified": null,
+      "idempotentRetrySucceeded": null
+    },
+
+    "step7_closeSession": {
+      "txHash": null,
+      "explorerUrl": null,
+      "refundAmount_units": null,
+      "expectedRefund_units": null,
+      "pass_fee_not_reversed": null,
+      "pass_refund_exact": null,
+      "SessionClosed_event": null
+    },
+
+    "offlineRejectionTests": {
+      "wrongAgent": "FOUNDRY_TEST_PASS",
+      "overGrossCap": "FOUNDRY_TEST_PASS",
+      "invalidSig": "FOUNDRY_TEST_PASS",
+      "replay": "FOUNDRY_TEST_PASS",
+      "expiredQuote": "FOUNDRY_TEST_PASS",
+      "expiredSession": "FOUNDRY_TEST_PASS",
+      "feeManipulation": "FOUNDRY_TEST_PASS",
+      "_note": "Verified by Foundry 60/60. Not burned as live mainnet gas."
+    }
+  },
+
+  "grantEvidence": {
+    "arcStudioProjectUrl": null,
+    "publicGitHubUrl": null,
+    "publicFrontendUrl": "https://arc-budgetrail.vercel.app",
+    "publicProviderHealthUrl": "https://arc-budgetrail.vercel.app/api/health",
+    "screenRecordingUrl": null,
+    "builderProfileUrl": null,
+    "submissionDeadline": "2026-11-01T00:00:00Z",
+    "submittedAt": null
   }
 }

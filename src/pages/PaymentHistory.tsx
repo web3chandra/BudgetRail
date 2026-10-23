@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 
 import { BUDGET_RAIL_ADDRESS, DEPLOY_BLOCK_TESTNET } from "@/lib/budgetRail";
+import { VersionBanner } from "@/components/VersionBanner";
 import {
   scanAllEvents, scanRecentEvents, filterByTab, eventTypeLabel, eventTypeColor,
   saveCheckpoint, loadCheckpoint, clearCheckpoint,
@@ -81,6 +82,14 @@ function EventRow({ e }: { e: ActivityEvent }) {
       case "PaymentSettled": return (
         <span className="tabular font-semibold text-[var(--success)]">
           {e.amount !== undefined ? formatUsdcShort(e.amount) : "—"}
+          {/* V2 events expose baseAmount and feeAmount; V1 events do not */}
+          {(e as ActivityEvent & { baseAmount?: bigint; feeAmount?: bigint }).baseAmount !== undefined && (
+            <span className="block text-[10px] text-[var(--subtle)] font-normal">
+              {formatUsdcShort((e as ActivityEvent & { baseAmount?: bigint }).baseAmount!)} base
+              {" + "}
+              {formatUsdcShort((e as ActivityEvent & { feeAmount?: bigint }).feeAmount!)} fee
+            </span>
+          )}
         </span>
       );
       case "SessionFunded": return (
@@ -264,6 +273,15 @@ export function PaymentHistory() {
 
   return (
     <div className="space-y-6">
+      {/* Version + network banner */}
+      <VersionBanner version="V1" />
+
+      {/* V1/V2 isolation notice */}
+      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] px-4 py-2.5 text-xs text-[var(--subtle)]">
+        This view shows V1 contract events only. V1 payments have no platform fee — provider amount = gross amount, fee = $0.000000.
+        V2 events (PaymentSettledV2 with base/fee/gross split) will appear here after V2 is deployed and scanned separately.
+      </div>
+
       {/* Header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
@@ -271,7 +289,7 @@ export function PaymentHistory() {
             Activity History
           </h1>
           <p className="text-sm text-[var(--subtle)] mt-1">
-            All BudgetRail events: session creation, USDC deposits, agent payments and refunds.
+            All BudgetRail V1 events: session creation, USDC deposits, agent payments and refunds.
             Source: <span className="mono text-xs">{BUDGET_RAIL_ADDRESS}</span>
           </p>
         </div>

@@ -45,6 +45,20 @@ export async function handleHealth(config: Config): Promise<Response> {
     });
   }
 
+  // V2 config — only include when configured
+  const v2Info = config.v2ContractAddress
+    ? {
+        v2ContractAddress: config.v2ContractAddress,
+        v2PriceBaseUnits:  config.v2PricePerCall.toString(),
+        v2Treasury:        config.treasuryAddress || "not-configured",
+        v2FeeBps:          50,
+        v2FeeRateDisplay:  "0.5% additive surcharge on base price",
+        // Note: feeAmount = floor(baseAmount * 50 / 10_000) — rounds down.
+        // For micro-payments that round to 0, no treasury transfer is made.
+        v2Enabled: true,
+      }
+    : { v2Enabled: false };
+
   return jsonResponse(200, {
     status:            "ok",
     chainId:           config.chainId,
@@ -58,6 +72,7 @@ export async function handleHealth(config: Config): Promise<Response> {
     network:           config.network,
     latestBlock:       blockNumber,
     rpcOk,
+    ...v2Info,
   });
 }
 

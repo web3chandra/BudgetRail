@@ -1,5 +1,6 @@
 {
   "note": "Values in this file are real onchain data. Never fabricate tx hashes or addresses.",
+  "IMPORTANT": "testnetLifecycle fields are all null — the manual 6-step lifecycle (createSession, fund, payForRequest, fulfill, closeSession) has NOT yet been executed. This file will be populated with real tx hashes after the operator completes the steps in docs/GRANT-EVIDENCE.md. Do not treat this file as evidence of completed testnet activity.",
   "chainId": 5042002,
   "chainName": "Arc Testnet",
   "rpc": "https://rpc.testnet.arc.io",
@@ -30,5 +31,86 @@
     "closeSessionTxHash": null,
     "finalOwnerBalanceDelta": null,
     "finalProviderBalance": null
+  },
+  "v2Contract": {
+    "_note": "Populate after V2 testnet deploy. Run: bun run v2:testnet-demo --step preflight",
+    "address": null,
+    "chainId": 5042002,
+    "chainName": "Arc Testnet",
+    "deployTxHash": null,
+    "deployedAt": null,
+    "explorerUrl": null,
+    "constructorArgs": {
+      "usdcAddress": "0x3600000000000000000000000000000000000000",
+      "treasury": null,
+      "_treasuryNote": "Set VITE_TREASURY_ADDRESS in .env before deploying. Run: bun run v2:preflight --network testnet",
+      "providerHint": null,
+      "_providerHintNote": "Pass intended provider C address. If C == treasury, a TreasuryMatchesProviderWarning event is emitted onchain."
+    },
+    "preDeployChecks": {
+      "usdcAddress_confirmed": "0x3600000000000000000000000000000000000000",
+      "usdcDecimals_confirmed": 6,
+      "chainId_confirmed": 5042002,
+      "feeBps_in_source": 50,
+      "feeDenominator_in_source": 10000,
+      "computeFee_50000_expected_fee": 250,
+      "computeFee_50000_expected_gross": 50250,
+      "foundryTests_pass": "60/60",
+      "preflightScript": "bun run v2:preflight --network testnet"
+    },
+    "verified_USDC_ADDRESS": null,
+    "verified_TREASURY": null,
+    "verified_FEE_BPS": null,
+    "verified_VERSION": null,
+    "verified_computeFee_50000": {
+      "fee": null,
+      "gross": null,
+      "expected_fee": 250,
+      "expected_gross": 50250,
+      "_verifyCmd": "cast call <V2_ADDRESS> 'computeFee(uint256)(uint256,uint256)' 50000 --rpc-url https://rpc.testnet.arc.io"
+    }
+  },
+  "v2Lifecycle": {
+    "status": "PENDING_MANUAL_EXECUTION",
+    "_note": "Populate after completing docs/V2-TESTNET-PLAN.md steps 1-8. Never fabricate values.",
+    "sessionId": null,
+    "walletA": null,
+    "walletB": null,
+    "walletC": null,
+    "walletD": null,
+    "walletE": null,
+    "createSessionTxHash": null,
+    "createSessionBlock": null,
+    "approveUsdcTxHash": null,
+    "fundSessionTxHash": null,
+    "fundSessionBlock": null,
+    "payment1TxHash": null,
+    "payment1Block": null,
+    "payment1BaseAmount": null,
+    "payment1FeeAmount": null,
+    "payment1GrossAmount": null,
+    "payment1ProviderDelta": null,
+    "payment1TreasuryDelta": null,
+    "payment1EventName": null,
+    "payment1TransferCount": null,
+    "fulfillRequestId": null,
+    "fulfillResultNonEmpty": null,
+    "retryFulfillIdempotent": null,
+    "closeSessionTxHash": null,
+    "closeSessionBlock": null,
+    "closeRefundAmount": null,
+    "closeTreasuryDelta": null,
+    "closeProviderDelta": null,
+    "securityChecklist": {
+      "wrongAgentReverts": "FOUNDRY_TEST_PASS",
+      "overCapReverts": "FOUNDRY_TEST_PASS",
+      "invalidSigReverts": "FOUNDRY_TEST_PASS",
+      "replayReverts": "FOUNDRY_TEST_PASS",
+      "expiredReverts": "FOUNDRY_TEST_PASS",
+      "networkMismatchReverts": "FOUNDRY_TEST_PASS",
+      "feeManipReverts": "FOUNDRY_TEST_PASS",
+      "doubleCloseReverts": "FOUNDRY_TEST_PASS",
+      "_note": "These are verified by Foundry tests (60/60 pass). Live testnet rejection not required."
+    }
   }
 }

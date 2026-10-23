@@ -20,11 +20,23 @@ Evidence required for grant submission, mapped to judging criteria.
 - [ ] AGENTS.md shows contract address, deploy tx, test counts
 - [ ] Contract was generated and deployed using Arc Studio (see docs/arc-studio-provenance.md)
 
-### B. Contract on Arc Testnet
-- [ ] Contract address: `0xf6a13df15ad93c2e2968e1d69c53894a923bda21`
-- [ ] Deploy tx: `0xf33cb9096a45c5cc083fbee4366384f4257f509ab94fe46ec4291e775bc4a5d9`
-- [ ] Explorer: https://explorer.testnet.arc.io/address/0xf6a13df15ad93c2e2968e1d69c53894a923bda21
-- [ ] Foundry tests: 59/59 pass (see docs/TEST-REPORT.md)
+### B. Contract on Arc Testnet (V1 — already deployed)
+- [x] Contract address: `0xf6a13df15ad93c2e2968e1d69c53894a923bda21`
+- [x] Deploy tx: `0xf33cb9096a45c5cc083fbee4366384f4257f509ab94fe46ec4291e775bc4a5d9`
+- [x] Explorer: https://explorer.testnet.arc.io/address/0xf6a13df15ad93c2e2968e1d69c53894a923bda21
+- [x] Chain ID: 5042002 (Arc Testnet)
+- [x] USDC ERC-20: `0x3600000000000000000000000000000000000000` (6 decimals)
+- [x] Foundry tests: 60/60 pass (V1 + V2 unit + invariant + C=E guard — see docs/TEST-REPORT.md)
+- [x] Provider tests: 108/108 pass
+- [x] SDK tests: 66/66 pass
+
+### B2. V2 Contract on Arc Testnet (NOT YET DEPLOYED — pending operator)
+- [ ] Contract address: ___________ (set after deploy; run `bun run v2:preflight --network testnet` first)
+- [ ] Deploy tx: ___________
+- [ ] Explorer: https://explorer.testnet.arc.io/address/___________
+- [ ] Verified: FEE_BPS = 50 onchain (`cast call <addr> 'FEE_BPS()(uint16)' --rpc-url https://rpc.testnet.arc.io`)
+- [ ] Verified: TREASURY = intended E address onchain
+- [ ] Verified: computeFee(50000) = (250, 50250) onchain
 
 ### C. Real testnet USDC movement (must complete manually)
 For each step, record the transaction hash and explorer link.
@@ -68,11 +80,13 @@ For each step, record the transaction hash and explorer link.
 - [ ] No phantom success states visible in recording
 
 ### E. Code quality evidence
-- [ ] Total automated tests: 208+ (59 Foundry + ~70 provider + 15 agent + ~39 SDK + ~100 frontend — run `bun test` for exact current count)
-- [ ] Lint: 0 errors
+- [ ] Total automated tests: 234+ (60 Foundry + 108 provider + 66 SDK + frontend/agent — run `bun test` for exact current count)
+- [ ] Lint: 0 errors (1 pre-existing warning in Playground.tsx — documented in PENDING.md L-01)
 - [ ] TypeScript: 0 errors
-- [ ] GitHub repo URL: ___________
-- [ ] .env / secrets not committed: confirmed by .gitignore
+- [ ] GitHub repo URL: ___________ (pending public push — P0-A + P0-B must be done first)
+- [x] Public frontend URL: `https://arc-budgetrail.vercel.app`
+- [x] Public provider health URL: `https://arc-budgetrail.vercel.app/api/health` (needs Vercel env vars)
+- [x] .env / secrets not committed: confirmed by .gitignore + git history scan (Part 10)
 
 ### F. Future product potential evidence
 - [ ] SDK: `packages/sdk/` — typed TypeScript client, 8 public functions, BudgetRailError typed errors

@@ -29,10 +29,16 @@ export interface ArcProfile {
   rpcUrl:           string;
   /** Block explorer base URL (no trailing slash) */
   explorerBase:     string;
-  /** Deployed BudgetRail contract address */
+  /** Deployed BudgetRail V1 contract address */
   contractAddress:  `0x${string}`;
-  /** Block at which the contract was deployed (used as getLogs fromBlock lower bound) */
+  /** Block at which V1 contract was deployed (used as getLogs fromBlock lower bound) */
   deployBlock:      bigint;
+  /** Deployed BudgetRail V2 contract address (ZERO when not yet deployed) */
+  v2ContractAddress: `0x${string}`;
+  /** Block at which V2 contract was deployed (0n when not yet deployed) */
+  v2DeployBlock:    bigint;
+  /** BudgetRail V2 treasury address E (immutable, ZERO when not configured) */
+  treasuryAddress:  `0x${string}`;
   /** Canonical USDC ERC-20 address (6 decimals) */
   usdcAddress:      `0x${string}`;
   /** Provider API base URL — no trailing slash, no /api suffix */
@@ -61,38 +67,44 @@ const NETWORK = (readStr("VITE_ARC_NETWORK", "testnet") === "mainnet"
   : "testnet");
 
 const TESTNET_PROFILE: ArcProfile = {
-  network:         "testnet",
-  chainId:         5042002,
-  chainName:       "Arc Testnet",
-  rpcUrl:          readStr("VITE_ARC_TESTNET_RPC", "https://rpc.testnet.arc.io"),
-  explorerBase:    "https://explorer.testnet.arc.io",
-  contractAddress: readAddr("VITE_BUDGET_RAIL_ADDRESS", "0xf6a13df15ad93c2e2968e1d69c53894a923bda21"),
-  deployBlock:     67_538_363n,
-  usdcAddress:     "0x3600000000000000000000000000000000000000",
-  providerApiUrl:  (() => {
+  network:           "testnet",
+  chainId:           5042002,
+  chainName:         "Arc Testnet",
+  rpcUrl:            readStr("VITE_ARC_TESTNET_RPC", "https://rpc.testnet.arc.io"),
+  explorerBase:      "https://explorer.testnet.arc.io",
+  contractAddress:   readAddr("VITE_BUDGET_RAIL_ADDRESS", "0xf6a13df15ad93c2e2968e1d69c53894a923bda21"),
+  deployBlock:       67_538_363n,
+  v2ContractAddress: readAddr("VITE_BUDGET_RAIL_V2_ADDRESS"),
+  v2DeployBlock:     0n, // Set after V2 testnet deployment
+  treasuryAddress:   readAddr("VITE_TREASURY_ADDRESS"),
+  usdcAddress:       "0x3600000000000000000000000000000000000000",
+  providerApiUrl:    (() => {
     const raw = readStr("VITE_PROVIDER_API_URL", "");
     return raw.replace(/\/api\/?$/, "").replace(/\/$/, "");
   })(),
-  providerPayout:  readAddr("VITE_PROVIDER_PAYOUT"),
-  quoteSigner:     readAddr("VITE_QUOTE_SIGNER"),
+  providerPayout:    readAddr("VITE_PROVIDER_PAYOUT"),
+  quoteSigner:       readAddr("VITE_QUOTE_SIGNER"),
 };
 
 const MAINNET_PROFILE: ArcProfile = {
-  network:         "mainnet",
-  chainId:         5042,
-  chainName:       "Arc Mainnet",
-  rpcUrl:          readStr("VITE_ARC_MAINNET_RPC", "https://rpc.mainnet.arc.io"),
-  explorerBase:    "https://explorer.arc.io",
-  // Mainnet contract address MUST be set explicitly — no testnet fallback
-  contractAddress: readAddr("VITE_BUDGET_RAIL_MAINNET_ADDRESS"),
-  deployBlock:     0n, // Set after mainnet deployment
-  usdcAddress:     "0x3600000000000000000000000000000000000000",
-  providerApiUrl:  (() => {
+  network:           "mainnet",
+  chainId:           5042,
+  chainName:         "Arc Mainnet",
+  rpcUrl:            readStr("VITE_ARC_MAINNET_RPC", "https://rpc.mainnet.arc.io"),
+  explorerBase:      "https://explorer.arc.io",
+  // Mainnet contract addresses MUST be set explicitly — no testnet fallback
+  contractAddress:   readAddr("VITE_BUDGET_RAIL_MAINNET_ADDRESS"),
+  deployBlock:       0n, // Set after mainnet V1 deployment
+  v2ContractAddress: readAddr("VITE_BUDGET_RAIL_V2_MAINNET_ADDRESS"),
+  v2DeployBlock:     0n, // Set after mainnet V2 deployment
+  treasuryAddress:   readAddr("VITE_TREASURY_MAINNET_ADDRESS"),
+  usdcAddress:       "0x3600000000000000000000000000000000000000",
+  providerApiUrl:    (() => {
     const raw = readStr("VITE_MAINNET_PROVIDER_API_URL", "");
     return raw.replace(/\/api\/?$/, "").replace(/\/$/, "");
   })(),
-  providerPayout:  readAddr("VITE_MAINNET_PROVIDER_PAYOUT"),
-  quoteSigner:     readAddr("VITE_MAINNET_QUOTE_SIGNER"),
+  providerPayout:    readAddr("VITE_MAINNET_PROVIDER_PAYOUT"),
+  quoteSigner:       readAddr("VITE_MAINNET_QUOTE_SIGNER"),
 };
 
 /** The active profile for this build. Import this everywhere. */
@@ -100,9 +112,13 @@ export const ARC: ArcProfile = NETWORK === "mainnet" ? MAINNET_PROFILE : TESTNET
 
 // ── Runtime guards ─────────────────────────────────────────────────────────
 
-/** True when both operator addresses are configured and non-zero. */
+/** True when both V1 operator addresses are configured and non-zero. */
 export const PROVIDER_CONFIGURED: boolean =
   ARC.providerPayout !== ZERO && ARC.quoteSigner !== ZERO;
+
+/** True when the V2 contract address and treasury are configured and non-zero. */
+export const V2_CONFIGURED: boolean =
+  ARC.v2ContractAddress !== ZERO && ARC.treasuryAddress !== ZERO;
 
 /**
  * Returns a human-readable error string when provider config is incomplete,

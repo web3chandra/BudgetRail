@@ -66,6 +66,22 @@ export function loadConfig() {
 
   const port = parseInt(optionalEnv("PORT", "3001"), 10);
 
+  // CORS allowed origin — MUST be set to the frontend URL in production.
+  // Use "*" only for local dev; production must use an explicit origin.
+  const allowedOrigin = optionalEnv("ALLOWED_ORIGIN", "*");
+
+  // ── V2 config (optional — omit if not yet deployed) ──────────────────────
+  // V2 contract address: required env var when V2 is active; empty string means V2 disabled.
+  const v2ContractAddress = optionalEnv("BUDGET_RAIL_V2_ADDRESS", "").toLowerCase() as `0x${string}`;
+
+  // Treasury E — immutable in the V2 contract; server MUST verify it matches at startup.
+  // Public address only; never a private key.
+  const treasuryAddress = optionalEnv("TREASURY_ADDRESS", "").toLowerCase() as `0x${string}`;
+
+  // V2 base price per call (6 decimals). Defaults to same as V1.
+  const v2PricePerCall = BigInt(optionalEnv("V2_PRICE_PER_CALL_BASE_UNITS",
+    optionalEnv("PRICE_PER_CALL_BASE_UNITS", "50000")));
+
   return {
     network,
     chainId,
@@ -79,6 +95,11 @@ export function loadConfig() {
     maxInputBytes,
     rateLimitPerMinute,
     port,
+    allowedOrigin,
+    // V2 — empty string means V2 routes are disabled
+    v2ContractAddress,
+    treasuryAddress,
+    v2PricePerCall,
   };
 }
 

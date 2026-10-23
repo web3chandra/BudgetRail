@@ -124,6 +124,17 @@ contract BudgetRailV2 is ReentrancyGuard, EIP712 {
     error InvalidOffset();
     error TreasuryMismatch();
 
+    // ── Deployment warnings ──────────────────────────────────────────────────
+
+    /// @notice Emitted at construction when the treasury (E) and the first session's provider (C)
+    /// share an address. This is valid for testnet or single-operator deployments, but on mainnet
+    /// the platform fee cannot be separated from provider revenue without redeploying the contract
+    /// (TREASURY is immutable). Included so the deploy tx is self-documenting onchain.
+    event TreasuryMatchesProviderWarning(
+        address indexed treasury,
+        string message
+    );
+
     // ── Events ───────────────────────────────────────────────────────────────
 
     event SessionCreated(
@@ -167,9 +178,15 @@ contract BudgetRailV2 is ReentrancyGuard, EIP712 {
 
     // ── Constructor ──────────────────────────────────────────────────────────
 
-    /// @param usdcAddress USDC ERC-20 contract address. Must have deployed code.
-    /// @param treasury    Platform treasury address (role E). Nonzero; operator-verified before deploy.
-    constructor(address usdcAddress, address treasury) EIP712("BudgetRail", VERSION) {
+    /// @param usdcAddress     USDC ERC-20 contract address. Must have deployed code.
+    /// @param treasury        Platform treasury address (role E). Nonzero; operator-verified before deploy.
+    /// @param providerHint    Expected provider address (role C) for the first session.
+    ///                        Pass address(0) to skip the C=E warning. When nonzero and equal to
+    ///                        `treasury`, a `TreasuryMatchesProviderWarning` event is emitted in the
+    ///                        deploy transaction so the condition is self-documenting onchain.
+    ///                        This does NOT revert — C=E is operationally valid for testnet or
+    ///                        single-operator deployments. Separate addresses before mainnet.
+    constructor(address usdcAddress, address treasury, address providerHint) EIP712("BudgetRail", VERSION) {
         if (usdcAddress == address(0)) revert ZeroAddress();
         if (treasury == address(0))    revert ZeroAddress();
         // Validate usdcAddress has code (not an EOA or empty address).
@@ -180,6 +197,15 @@ contract BudgetRailV2 is ReentrancyGuard, EIP712 {
         USDC_TOKEN   = IERC20(usdcAddress);
         USDC_ADDRESS = usdcAddress;
         TREASURY     = treasury;
+
+        // Emit a self-documenting warning if treasury == provider hint.
+        // Does not revert: C=E is valid for testnet. Separate before mainnet.
+        if (providerHint != address(0) && providerHint == treasury) {
+            emit TreasuryMatchesProviderWarning(
+                treasury,
+                "treasury(E)==provider(C): fee revenue indistinguishable; separate addresses before mainnet"
+            );
+        }
     }
 
     // ── Session lifecycle ────────────────────────────────────────────────────
