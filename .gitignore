@@ -7,6 +7,10 @@ provider/.env
 agent/.env
 agent/agent.env
 
+# Example env files — contain real addresses and instructions, keep off public repo
+env.example.txt
+provider/env.example.txt
+
 # Circle credentials
 .circle/
 

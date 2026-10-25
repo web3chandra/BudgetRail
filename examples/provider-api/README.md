@@ -1,4 +1,6 @@
-# BudgetRail — Example Provider API
+# BudgetRail — Example Provider API (RepoCheck)
+
+**Integration status: Confirmed live** — uses OSV.dev (`https://api.osv.dev`, free, no key) and GitHub Contents API (unauthenticated). The domain `repocheck.dev` is an unrelated third-party website and is NOT used by this code. `repocheck.ts` is a fully self-contained reference implementation.
 
 This directory shows how to build a new provider service that integrates with BudgetRail.
 

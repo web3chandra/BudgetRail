@@ -172,7 +172,11 @@ function classifyError(raw: string, context: "quote" | "pay" | "fulfill"): Class
       return { code: "SESSION_CLOSED", userMessage: "This session is closed and can no longer accept payments.", retryable: false, action: "Create a new session." };
     if (msg.includes("session expired") || msg.includes("expired"))
       return { code: "SESSION_EXPIRED", userMessage: "This session has expired.", retryable: false, action: "Create a new session or top up an active one." };
-    if (msg.includes("provider") || msg.includes("503") || msg.includes("network") || msg.includes("fetch"))
+    if (msg.includes("provider does not match") || msg.includes("payout address"))
+      return { code: "PROVIDER_MISMATCH", userMessage: "Session provider address does not match this provider server.", retryable: false, action: "This session was created with a different provider wallet (C). Create a new session using the current provider address shown on the New Budget page." };
+    if (msg.includes("quotesigner does not match") || msg.includes("signing key"))
+      return { code: "SIGNER_MISMATCH", userMessage: "Session quote signer does not match this provider server.", retryable: false, action: "This session was created with a different quote signer (D). Create a new session." };
+    if (msg.includes("503") || msg.includes("network") || msg.includes("fetch") || msg.includes("unreachable"))
       return { code: "PROVIDER_UNREACHABLE", userMessage: "Provider API is unreachable.", retryable: true, action: "Check that the provider server is running, then retry." };
     if (msg.includes("schema") || msg.includes("unexpected"))
       return { code: "PROVIDER_SCHEMA_MISMATCH", userMessage: "Provider returned an unexpected response format.", retryable: false, action: "Check provider version compatibility." };
@@ -265,7 +269,11 @@ export function Playground() {
   const { switchChain } = useSwitchChain();
   const publicClient = usePublicClient({ chainId: CHAIN_ID });
 
-  const [sessionIdInput, setSessionIdInput] = useState("");
+  // Pre-fill session ID from ?session= query param (e.g. from agent dashboard card)
+  const searchParams = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
+  const sessionFromUrl = searchParams.get("session") ?? "";
+
+  const [sessionIdInput, setSessionIdInput] = useState(sessionFromUrl);
   const [inputText, setInputText]           = useState("");
   const [flow, setFlow]                     = useState<FlowData>({ stage: "idle" });
   const [showConfirm, setShowConfirm]       = useState(false);

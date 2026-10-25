@@ -3,12 +3,12 @@
  * Wallet status, onchain USDC balance, session list (paginated), recent PaymentSettled events.
  * Read-only functions work without wallet; balances need a connected address.
  */
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
-import { useAccount, useReadContract, useReadContracts } from "wagmi";
+import { useAccount, useReadContract, useReadContracts, usePublicClient } from "wagmi";
 import { erc20Abi } from "viem";
 import { arcTestnet } from "viem/chains";
-import { PlusCircle, RefreshCw, ChevronLeft, ChevronRight, Zap } from "lucide-react";
+import { PlusCircle, RefreshCw, ChevronLeft, ChevronRight, Zap, UserCheck } from "lucide-react";
 import { ConnectKitButton } from "connectkit";
 import { getUsdc } from "@/onchain-facts";
 import { formatUsdcShort, formatAddr, formatTs, sessionStatus, isExpired } from "@/lib/format";
@@ -68,6 +68,85 @@ function useSessionBatch(ids: bigint[] | undefined) {
   });
 
   return { sessions: data?.map(d => d.result), isLoading };
+}
+
+// ── Hook: sessions where connected wallet is agent B ──────────────────────
+// Scans ALL SessionCreated logs for agent == address (from contract deploy block).
+// Re-runs every time the agent address changes.
+const DEPLOY_BLOCK = 67_538_363n; // BudgetRail V1 deploy block
+
+function useAgentSessions(agent: `0x${string}` | undefined) {
+  const publicClient = usePublicClient({ chainId: CHAIN_ID });
+  const [sessionIds, setSessionIds] = useState<bigint[]>([]);
+  const [loading, setLoading]       = useState(false);
+  const [scanError, setScanError]   = useState<string | null>(null);
+  const [coverage, setCoverage]     = useState<{ scanned: bigint; head: bigint } | null>(null);
+  const prevAgent = useRef<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (!agent || !publicClient) {
+      setSessionIds([]);
+      setScanError(null);
+      setCoverage(null);
+      prevAgent.current = undefined;
+      return;
+    }
+    // Re-fetch whenever the wallet address changes
+    if (prevAgent.current === agent.toLowerCase()) return;
+    prevAgent.current = agent.toLowerCase();
+
+    setSessionIds([]);
+    setScanError(null);
+    setCoverage(null);
+    setLoading(true);
+    void (async () => {
+      try {
+        const head = await publicClient.getBlockNumber();
+        const allIds: bigint[] = [];
+        const WINDOW = 10_000n;
+        let lastScanned = DEPLOY_BLOCK;
+        for (let from = DEPLOY_BLOCK; from <= head; from += WINDOW) {
+          const to = from + WINDOW - 1n > head ? head : from + WINDOW - 1n;
+          try {
+            const logs = await publicClient.getLogs({
+              address: BUDGET_RAIL_ADDRESS,
+              event: {
+                type: "event",
+                name: "SessionCreated",
+                inputs: [
+                  { name: "sessionId", type: "uint256", indexed: true },
+                  { name: "owner",     type: "address",  indexed: true },
+                  { name: "agent",     type: "address",  indexed: true },
+                ],
+              },
+              args:      { agent },
+              fromBlock: from,
+              toBlock:   to,
+            });
+            for (const l of logs) {
+              const id = (l.args as { sessionId?: bigint }).sessionId;
+              if (id !== undefined) allIds.push(id);
+            }
+            lastScanned = to;
+          } catch {
+            // Window failed — continue scanning remaining windows
+            setScanError(`Scan partial: some blocks could not be read. Results may be incomplete.`);
+          }
+        }
+        // Deduplicate and sort ascending
+        const unique = [...new Map(allIds.map(id => [id.toString(), id])).values()]
+          .sort((a, b) => (a < b ? -1 : 1));
+        setSessionIds(unique);
+        setCoverage({ scanned: lastScanned, head });
+      } catch (err) {
+        setScanError(err instanceof Error ? err.message : "RPC error during agent session scan");
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [agent, publicClient]);
+
+  return { sessionIds, loading, scanError, coverage };
 }
 
 // ── Session card ───────────────────────────────────────────────────────────
@@ -173,6 +252,8 @@ export function Dashboard() {
 
   const { count, ids, isLoading: sessionsLoading } = useOwnerSessions(address, page);
   const { sessions, isLoading: batchLoading } = useSessionBatch(ids);
+  const { sessionIds: agentSessionIds, loading: agentLoading, scanError: agentScanError, coverage: agentCoverage } = useAgentSessions(address);
+  const { sessions: agentSessions } = useSessionBatch(agentSessionIds);
   const { events, loading: eventsLoading, error: eventsError, fetched, fetchEvents } = useRecentPayments(BUDGET_RAIL_ADDRESS);
 
   const totalPages = count ? Math.ceil(Number(count) / PAGE_SIZE) : 0;
@@ -335,6 +416,120 @@ export function Dashboard() {
             )}
           </div>
         </>
+      )}
+
+      {/* Agent Sessions tab — always shown when connected */}
+      {isConnected && (
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <UserCheck size={16} className="text-[var(--accent)]" />
+            <h2 className="display font-semibold text-lg text-[var(--ink-2)]">
+              Agent Sessions
+              {!agentLoading && agentSessionIds.length > 0 && (
+                <span className="ml-1 text-[var(--subtle)] font-normal">({agentSessionIds.length})</span>
+              )}
+            </h2>
+          </div>
+          <p className="text-xs text-[var(--subtle)] mb-3">
+            Sessions where <span className="mono">{address && formatAddr(address)}</span> is authorized as agent B — you can pay for API calls from these in the Playground.
+            Identity verified from onchain <span className="mono">SessionCreated</span> logs (V1 contract, block {DEPLOY_BLOCK.toString()}+).
+          </p>
+
+          {/* Coverage / error badge */}
+          {agentScanError && (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-3 py-2 mb-3 text-xs text-amber-200/80">
+              {agentScanError.includes("503") || agentScanError.includes("fetch") || agentScanError.includes("RPC")
+                ? "RPC temporarily unavailable — scan incomplete. Results shown may be partial. Refresh when RPC recovers."
+                : agentScanError}
+            </div>
+          )}
+          {!agentLoading && !agentScanError && agentCoverage && (
+            <p className="text-xs text-[var(--subtle)] mb-3">
+              Scan complete: blocks {DEPLOY_BLOCK.toString()} — {agentCoverage.head.toString()}.
+              {agentCoverage.scanned < agentCoverage.head && (
+                <span className="text-amber-400"> (some windows failed — data may be partial)</span>
+              )}
+            </p>
+          )}
+
+          {agentLoading ? (
+            <div className="space-y-3">{[1,2].map(i => <SkeletonCard key={i} />)}</div>
+          ) : agentSessionIds.length === 0 ? (
+            <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-5 text-center">
+              <p className="text-sm text-[var(--muted)]">No agent sessions found for this wallet.</p>
+              <p className="text-xs text-[var(--subtle)] mt-1">
+                {agentScanError
+                  ? "Scan did not complete — retry when RPC is available."
+                  : "Ask an owner to create a session with your address as agent B, then share the session link."}
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {agentSessionIds.map((id, i) => {
+                const s = agentSessions?.[i];
+                if (!s) return <SkeletonCard key={id.toString()} />;
+                const available = s.totalFunded - s.totalSpent;
+                const status    = sessionStatus(s.closed, s.expiresAt);
+                return (
+                  <div key={id.toString()} className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 hover:bg-[var(--surface-strong)] transition-colors">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="display font-bold text-[var(--accent)] text-lg tabular">#{id.toString()}</span>
+                        <StatusBadge status={status} />
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-[rgba(66,184,224,0.12)] text-[var(--accent)] font-medium">Agent B</span>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <Link
+                          to={`/sessions/${id.toString()}`}
+                          className="inline-flex items-center gap-1 rounded-lg border border-[var(--border)]
+                                     bg-[var(--surface-muted)] px-2.5 py-1.5 text-xs text-[var(--muted)]
+                                     hover:text-[var(--ink)] transition-colors"
+                        >
+                          Details
+                        </Link>
+                        {!s.closed && !isExpired(s.expiresAt) && available > 0n && (
+                          <Link
+                            to={`/playground?session=${id.toString()}`}
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--accent)] text-[#0d1b2f]
+                                       px-3 py-1.5 text-xs font-semibold hover:bg-[var(--accent-hover)] transition-colors"
+                          >
+                            <Zap size={12} />
+                            Pay
+                          </Link>
+                        )}
+                      </div>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2 text-xs">
+                      <div>
+                        <p className="text-[var(--subtle)]">Available</p>
+                        <p className={`font-semibold tabular ${available === 0n ? "text-[var(--subtle)]" : "text-[var(--success)]"}`}>
+                          {formatUsdcShort(available)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[var(--subtle)]">Per-call cap</p>
+                        <p className="font-semibold tabular">{formatUsdcShort(s.perPaymentCap)}</p>
+                      </div>
+                      <div>
+                        <p className="text-[var(--subtle)]">Expires</p>
+                        <p className="text-[var(--muted)]">{isExpired(s.expiresAt) ? "Expired" : formatTs(s.expiresAt)}</p>
+                      </div>
+                      <div>
+                        <p className="text-[var(--subtle)]">Owner</p>
+                        <AddrLink address={s.owner} />
+                      </div>
+                      <div>
+                        <p className="text-[var(--subtle)]">Provider payout C</p>
+                        <AddrLink address={s.provider} />
+                        <p className="text-[var(--subtle)] mt-0.5">Service revenue — not connected wallet</p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       )}
 
       {/* Recent PaymentSettled events */}

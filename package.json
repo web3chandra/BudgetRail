@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently --names vite,provider --prefix-colors cyan,yellow \"vite\" \"cd provider && bun run src/index.ts\"",
-    "dev:frontend": "vite",
+    "build": "vite build && bun build api/rpc.ts api/health.ts api/quotes.ts api/fulfill.ts --outdir dist/api --target node --format esm",
+  "dev:frontend": "vite",
     "deploy:self": "bun run ./scripts/self-deploy.ts",
     "compass:deploy": "bun run ./scripts/compass-deploy.ts",
     "fetch:abi": "bun run ./scripts/fetch-abi.ts",

@@ -1,16 +1,16 @@
 {
   "buildCommand": "bun run build",
   "outputDirectory": "dist",
+  "installCommand": "bun install",
   "framework": "vite",
   "functions": {
-    "api/**/*.ts": {
-      "runtime": "nodejs22.x"
-    }
+    "api/*.ts": { "runtime": "@vercel/node@5" }
   },
   "rewrites": [
-    { "source": "/api/quotes/v2", "destination": "/api/quotes/v2" },
-    { "source": "/api/fulfill/v2", "destination": "/api/fulfill/v2" },
+    { "source": "/api/rpc",        "destination": "/api/rpc" },
     { "source": "/api/health",     "destination": "/api/health" },
+    { "source": "/api/quotes/v2",  "destination": "/api/quotesV2" },
+    { "source": "/api/fulfill/v2", "destination": "/api/fulfillV2" },
     { "source": "/api/quotes",     "destination": "/api/quotes" },
     { "source": "/api/fulfill",    "destination": "/api/fulfill" },
     { "source": "/(.*)",           "destination": "/index.html" }

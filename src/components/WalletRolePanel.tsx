@@ -252,7 +252,8 @@ export function WalletRolePanel({
   contractVersion = "V1",
   collapsed: initialCollapsed = false,
   className = "",
-}: WalletRolePanelProps) {
+  connectedAddress,
+}: WalletRolePanelProps & { connectedAddress?: `0x${string}` }) {
   const [collapsed, setCollapsed] = useState(initialCollapsed);
   const ZERO = "0x0000000000000000000000000000000000000000" as `0x${string}`;
 
@@ -280,6 +281,12 @@ export function WalletRolePanel({
 
   const isProviderZero = providerAddress === ZERO;
   const isSignerZero   = signerAddress   === ZERO;
+
+  // Only show the "ownership unverified" warning on Role C when the CONNECTED
+  // wallet IS the provider C wallet — it is their cue to verify ownership.
+  // Owners, agents, viewers, and anyone else must never see this prompt.
+  const connectedIsProvider = !!(connectedAddress && providerAddress &&
+    connectedAddress.toLowerCase() === providerAddress.toLowerCase());
 
   return (
     <div className={`rounded-2xl border border-[var(--border)] bg-[var(--surface)] overflow-hidden ${className}`}>
@@ -359,7 +366,9 @@ export function WalletRolePanel({
               isZero={isProviderZero}
               warning={isProviderZero
                 ? "Provider payout address is zero — session creation is blocked until VITE_PROVIDER_PAYOUT is set."
-                : "Ownership unverified. The operator or external provider controls this wallet. Use the ownership proof tool below to verify."}
+                : connectedIsProvider
+                  ? "You are connected as the provider payout wallet. Use the ownership proof tool below to prove you control this address."
+                  : undefined}
             />
             <RoleRow
               role="D"

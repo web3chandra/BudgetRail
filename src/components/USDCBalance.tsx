@@ -28,7 +28,7 @@ export function USDCBalance({ address, label = "Balance", className = "" }: USDC
     functionName: "balanceOf",
     args:    [address],
     chainId: CHAIN_ID,
-    query:   { refetchInterval: 15_000 },
+    query:   { refetchInterval: 30_000, staleTime: 30_000 },
   });
 
   const display = isLoading

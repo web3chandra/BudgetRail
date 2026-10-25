@@ -23,7 +23,20 @@ import { config } from './config'
 import App from './App'
 import './index.css'
 
-const queryClient = new QueryClient()
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      // Cache reads for 30s before going stale — prevents hammering Arc Testnet RPC
+      staleTime:            30_000,
+      // Keep cached data for 2 minutes after last use
+      gcTime:               120_000,
+      // Only retry once on error (RPC rate limit hits 429 — no value in 3 retries)
+      retry:                1,
+      // Don't refetch when user switches tabs back — reduces spurious RPC bursts
+      refetchOnWindowFocus: false,
+    },
+  },
+})
 
 // Studio logo SVG
 const StudioLogo = () => (

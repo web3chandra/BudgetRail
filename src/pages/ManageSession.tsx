@@ -12,7 +12,7 @@
  * - Old-signer compatibility warning for sessions using the previous quote signer.
  * - Reconciles chain state after every confirmed receipt.
  */
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
   useAccount, useReadContract, useWriteContract,
@@ -20,9 +20,9 @@ import {
 } from "wagmi";
 import { erc20Abi, decodeEventLog } from "viem";
 import { arcTestnet } from "viem/chains";
-import { ArrowLeft, AlertTriangle, ShieldAlert, PlusCircle, Info } from "lucide-react";
+import { ArrowLeft, AlertTriangle, ShieldAlert, PlusCircle, Info, Zap, Copy, Check } from "lucide-react";
 import { getUsdc } from "@/onchain-facts";
-import { BUDGET_RAIL_ABI, BUDGET_RAIL_ADDRESS, QUOTE_SIGNER } from "@/lib/budgetRail";
+import { BUDGET_RAIL_ABI, BUDGET_RAIL_ADDRESS, QUOTE_SIGNER, type SessionTuple } from "@/lib/budgetRail";
 import { formatUsdcShort, formatAddr, formatTs, isExpired, sessionStatus } from "@/lib/format";
 import { parseOnchainError } from "@/lib/parseOnchainError";
 import { NetworkGuard } from "@/components/NetworkGuard";
@@ -63,6 +63,9 @@ export function ManageSession() {
   const { address, isConnected, chainId } = useAccount();
   const { switchChain } = useSwitchChain();
 
+  // ── Share link state ─────────────────────────────────────────────────
+  const [linkCopied, setLinkCopied] = useState(false);
+
   // ── Close flow state ──────────────────────────────────────────────────
   const [closeFlow, setCloseFlow] = useState<CloseFlow>("idle");
   const [closeError, setCloseError] = useState<string | null>(null);
@@ -79,18 +82,35 @@ export function ManageSession() {
   const sessionId = (() => { try { return id ? BigInt(id) : null; } catch { return null; } })();
 
   // ── Session read ──────────────────────────────────────────────────────
-  const { data: sessionData, isLoading, refetch } = useReadContract({
+  // We keep a stable ref to the last confirmed-good session so that a
+  // wallet switch or window-refocus refetch never flashes "not found".
+  const prevSessionRef = useRef<SessionTuple | undefined>(undefined);
+
+  const { data: sessionDataRaw, isLoading, isFetching, refetch } = useReadContract({
     address: BUDGET_RAIL_ADDRESS,
     abi: BUDGET_RAIL_ABI,
     functionName: "getSession",
-    args: [sessionId ?? 0n],
+    args: [sessionId ?? 0n] as [bigint],
     chainId: CHAIN_ID,
     query: {
       enabled: !!sessionId,
-      refetchInterval: closeFlow === "idle" && topUpFlow === "idle" ? 20_000 : 3_000,
+      refetchInterval: closeFlow === "idle" && topUpFlow === "idle" ? 30_000 : 3_000,
+      staleTime: 15_000,
     },
   });
-  const session = sessionData;
+
+  // Update the stable ref whenever a valid session is returned
+  if (sessionDataRaw && sessionDataRaw.owner !== "0x0000000000000000000000000000000000000000") {
+    prevSessionRef.current = sessionDataRaw;
+  }
+
+  // While refetching, show the last good value to prevent a "not found" flash
+  const session: SessionTuple | undefined = (isFetching && !sessionDataRaw && prevSessionRef.current)
+    ? prevSessionRef.current
+    : sessionDataRaw;
+
+  // isHardLoading: true only on the very first fetch before any data arrives
+  const isHardLoading = isLoading && !isFetching && !prevSessionRef.current;
 
   // ── USDC balance for allowance check ─────────────────────────────────
   const { data: usdcBalance } = useReadContract({
@@ -116,6 +136,7 @@ export function ManageSession() {
 
   // ── Role checks (re-evaluated on wallet switch) ───────────────────────
   const isOwner  = !!(session && address && session.owner.toLowerCase() === address.toLowerCase());
+  const isAgent  = !!(session && address && session.agent.toLowerCase() === address.toLowerCase());
   const isWrongChain = isConnected && chainId !== CHAIN_ID;
 
   // ── Old-signer compatibility ──────────────────────────────────────────
@@ -400,31 +421,55 @@ export function ManageSession() {
   const canAddFunds   = !!(session && !session.closed && !isExpired(session.expiresAt) && topUpHeadroom > 0n);
   const isFullyFunded = session ? session.totalFunded >= session.maxBudget : false;
 
+  function copySessionLink() {
+    const url = `${window.location.origin}/sessions/${sessionId?.toString() ?? id}`;
+    void navigator.clipboard.writeText(url).then(() => {
+      setLinkCopied(true);
+      toast.success("Session link copied — share with your agent wallet");
+      setTimeout(() => setLinkCopied(false), 2500);
+    });
+  }
+
   // ── Render ────────────────────────────────────────────────────────────
 
   return (
     <div className="max-w-xl space-y-6">
       {/* Back nav */}
-      <div className="flex items-center gap-3">
-        <Link to="/" className="text-[var(--subtle)] hover:text-[var(--ink)] transition-colors" aria-label="Back">
-          <ArrowLeft size={20} />
-        </Link>
-        <div>
-          <h1 className="display font-bold text-2xl text-[var(--ink)] tracking-tight">
-            Session #{sessionId.toString()}
-          </h1>
-          <p className="text-sm text-[var(--subtle)]">Add funds or close and refund</p>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Link to="/" className="text-[var(--subtle)] hover:text-[var(--ink)] transition-colors" aria-label="Back">
+            <ArrowLeft size={20} />
+          </Link>
+          <div>
+            <h1 className="display font-bold text-2xl text-[var(--ink)] tracking-tight">
+              Session #{sessionId.toString()}
+            </h1>
+            <p className="text-sm text-[var(--subtle)]">Add funds or close and refund</p>
+          </div>
         </div>
+        {/* Share link — copyable URL for the agent wallet */}
+        <button
+          onClick={copySessionLink}
+          className="flex items-center gap-1.5 rounded-xl border border-[var(--border)]
+                     bg-[var(--surface-muted)] px-3 py-2 text-xs text-[var(--muted)]
+                     hover:text-[var(--ink)] hover:border-[var(--accent)] transition-colors"
+          title="Copy shareable link for this session"
+        >
+          {linkCopied ? <Check size={13} className="text-[var(--success)]" /> : <Copy size={13} />}
+          {linkCopied ? "Copied!" : "Share link"}
+        </button>
       </div>
 
       {/* Version + network banner — always V1 for this page (V2 page not yet built) */}
       <VersionBanner version="V1" />
 
       <NetworkGuard readOnly>
-        {isLoading ? (
+        {isHardLoading ? (
+          <SkeletonCard />
+        ) : isFetching && (!session || session.owner === "0x0000000000000000000000000000000000000000") ? (
           <SkeletonCard />
         ) : !session || session.owner === "0x0000000000000000000000000000000000000000" ? (
-          <ErrorBanner message={`Session ${sessionId} not found on Arc Testnet.`} />
+          <ErrorBanner message={`Session ${sessionId.toString()} not found on Arc Testnet. The session ID may not exist yet, or the RPC is temporarily unavailable — try refreshing.`} />
         ) : (
           <>
             {/* Old-signer compatibility warning */}
@@ -451,8 +496,24 @@ export function ManageSession() {
 
               <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
                 <div><p className="text-xs text-[var(--subtle)] mb-0.5">Owner</p><AddrLink address={session.owner} /></div>
-                <div><p className="text-xs text-[var(--subtle)] mb-0.5">Agent</p><AddrLink address={session.agent} /></div>
-                <div><p className="text-xs text-[var(--subtle)] mb-0.5">Provider payout</p><AddrLink address={session.provider} /></div>
+                <div>
+                  <p className="text-xs text-[var(--subtle)] mb-0.5">Agent</p>
+                  <AddrLink address={session.agent} />
+                  {isOwner && (
+                    <button
+                      onClick={copySessionLink}
+                      className="mt-1 flex items-center gap-1 text-xs text-[var(--accent)] hover:underline"
+                    >
+                      {linkCopied ? <Check size={11} /> : <Copy size={11} />}
+                      {linkCopied ? "Copied!" : "Copy link for agent"}
+                    </button>
+                  )}
+                </div>
+                <div>
+                  <p className="text-xs text-[var(--subtle)] mb-0.5">Provider payout</p>
+                  <AddrLink address={session.provider} />
+                  <p className="text-xs text-[var(--subtle)] mt-0.5 opacity-60">Service revenue — set by operator, not your wallet</p>
+                </div>
                 <div><p className="text-xs text-[var(--subtle)] mb-0.5">Quote signer</p><AddrLink address={session.quoteSigner} /></div>
               </div>
 
@@ -485,16 +546,62 @@ export function ManageSession() {
               )}
             </div>
 
+            {/* Agent view — shown when connected wallet is agent B */}
+            {isAgent && !isOwner && (
+              <div className="rounded-2xl border border-[rgba(66,184,224,0.3)] bg-[rgba(66,184,224,0.06)] p-5 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Zap size={16} className="text-[var(--accent)]" />
+                  <p className="font-semibold text-[var(--accent)] text-sm">You are the authorized agent (wallet B)</p>
+                </div>
+                <p className="text-xs text-[var(--muted)]">
+                  Your wallet is authorized to make payments from this session. You cannot add funds or close it — only the owner (<span className="mono">{formatAddr(session.owner)}</span>) can do that.
+                </p>
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div className="rounded-xl bg-[var(--surface-muted)] border border-[var(--border)] px-3 py-2.5">
+                    <p className="text-[var(--subtle)]">Available to spend</p>
+                    <p className="font-semibold tabular text-[var(--success)] mt-0.5">{formatUsdcShort(availableNow)}</p>
+                  </div>
+                  <div className="rounded-xl bg-[var(--surface-muted)] border border-[var(--border)] px-3 py-2.5">
+                    <p className="text-[var(--subtle)]">Per-call cap</p>
+                    <p className="font-semibold tabular mt-0.5">{formatUsdcShort(session.perPaymentCap)}</p>
+                  </div>
+                </div>
+                {!session.closed && !isExpired(session.expiresAt) && availableNow > 0n && (
+                  <Link
+                    to={`/playground?session=${sessionId.toString()}`}
+                    className="w-full inline-flex items-center justify-center gap-2 rounded-xl
+                               bg-[var(--accent)] text-[#0d1b2f] py-3 font-semibold text-sm
+                               hover:bg-[var(--accent-hover)] transition-colors"
+                  >
+                    <Zap size={15} />
+                    Go to Playground — pay for an API call
+                  </Link>
+                )}
+                {(session.closed || isExpired(session.expiresAt)) && (
+                  <p className="text-xs text-[var(--danger)]">
+                    {session.closed ? "Session is closed — no further payments possible." : "Session has expired — no further payments possible."}
+                  </p>
+                )}
+                {!session.closed && !isExpired(session.expiresAt) && availableNow === 0n && (
+                  <p className="text-xs text-[var(--subtle)]">No available balance — ask the owner to top up.</p>
+                )}
+              </div>
+            )}
+
             {/* Who gets paid? — role panel with immutable chain state */}
             <WalletRolePanel
               ownerAddress={address}
               session={session}
               contractVersion="V1"
               collapsed
+              connectedAddress={address}
             />
 
-            {/* Ownership proof — operator can verify C or D ownership */}
-            {session.provider !== "0x0000000000000000000000000000000000000000" && (
+            {/* Ownership proof — only shown when the connected wallet IS the provider C wallet.
+                 The owner does not see this: they cannot sign for C, and seeing it causes confusion.
+                 C uses this to prove to the owner that C controls that payout address. */}
+            {session.provider !== "0x0000000000000000000000000000000000000000" &&
+             address && address.toLowerCase() === session.provider.toLowerCase() && (
               <OwnershipProof
                 claimAddress={session.provider}
                 roleLabel="Provider payout C"

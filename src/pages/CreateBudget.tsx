@@ -257,6 +257,7 @@ export function CreateBudget() {
       {/* Who gets paid? — always visible, collapsed by default before form */}
       <WalletRolePanel
         ownerAddress={address}
+        connectedAddress={address}
         agentAddress={
           isValidAddress(form.agentAddress)
             ? form.agentAddress
@@ -276,7 +277,11 @@ export function CreateBudget() {
             {/* Error banners */}
             {flow.simError && (
               <ErrorBanner
-                message={`Simulation failed (no gas spent): ${flow.simError}`}
+                message={
+                  flow.simError.includes("503") || flow.simError.includes("RPC") || flow.simError.includes("fetch")
+                    ? `RPC temporarily unavailable — no funds spent, no transaction sent. Retry in a moment. (${flow.simError})`
+                    : `Simulation failed — no gas spent, no transaction opened. ${flow.simError}`
+                }
                 onDismiss={dismissError}
               />
             )}
@@ -291,10 +296,22 @@ export function CreateBudget() {
             {(flow.step === "form") && (
               <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 space-y-5">
 
+                {/* Connected owner A — always visible, never auto-filled from agent field */}
+                <div className="rounded-xl bg-[rgba(66,184,224,0.06)] border border-[rgba(66,184,224,0.2)] px-4 py-3">
+                  <p className="text-xs font-semibold text-[var(--accent)] uppercase tracking-wider mb-1">
+                    Connected owner A — signs &amp; broadcasts the transaction
+                  </p>
+                  <p className="mono text-sm text-[var(--ink)]">{address}</p>
+                  <p className="text-xs text-[var(--subtle)] mt-0.5">
+                    This wallet will be recorded onchain as the session owner. Only it can fund or close.
+                  </p>
+                </div>
+
                 {/* Agent address */}
                 <div>
                   <label className="block text-sm font-medium text-[var(--ink-2)] mb-1.5" htmlFor="agent">
-                    Agent wallet B <span className="text-[var(--danger)]">*</span>
+                    Authorized agent B <span className="text-[var(--danger)]">*</span>
+                    <span className="ml-1 text-xs font-normal text-[var(--subtle)]">— the wallet allowed to pay from this session</span>
                   </label>
                   <input
                     id="agent"
@@ -619,16 +636,29 @@ export function CreateBudget() {
           title="Create payment session?"
           body={
             <div className="space-y-2 text-sm">
-              <p><strong>Agent:</strong> <span className="mono">{formatAddr(form.agentAddress)}</span></p>
-              <p><strong>Provider payout:</strong> <span className="mono">{formatAddr(PROVIDER_PAYOUT)}</span></p>
-              <p><strong>Quote signer:</strong> <span className="mono">{formatAddr(QUOTE_SIGNER)}</span></p>
+              {/* Owner row — explicitly shown so there is no ambiguity about who signs */}
+              <div className="rounded-lg bg-[rgba(66,184,224,0.08)] border border-[rgba(66,184,224,0.2)] px-3 py-2">
+                <p className="text-xs font-semibold text-[var(--accent)] mb-0.5">Connected owner A — this wallet signs the transaction</p>
+                <p className="mono text-xs text-[var(--ink)]">{address}</p>
+                <p className="text-xs text-[var(--subtle)] mt-0.5">
+                  Chain: Arc Testnet ({CHAIN_ID}) · Contract: {formatAddr(BUDGET_RAIL_ADDRESS)}
+                </p>
+              </div>
+              <p><strong>Agent B (authorized payer):</strong> <span className="mono">{form.agentAddress}</span></p>
+              <p><strong>Provider payout C:</strong> <span className="mono">{formatAddr(PROVIDER_PAYOUT)}</span>
+                <span className="text-xs text-[var(--subtle)] ml-1">— service revenue, NOT connected wallet</span>
+              </p>
+              <p><strong>Quote signer D:</strong> <span className="mono">{formatAddr(QUOTE_SIGNER)}</span>
+                <span className="text-xs text-[var(--subtle)] ml-1">— backend signing key, NOT connected wallet</span>
+              </p>
               <p><strong>Max budget:</strong> {formatUsdcShort(parseUsdcUnits(form.maxBudget) ?? 0n)}</p>
               <p><strong>Per-call cap:</strong> {formatUsdcShort(parseUsdcUnits(form.perPaymentCap) ?? 0n)}</p>
               <p><strong>Expires:</strong> {form.expiryDays} days from now</p>
               <p><strong>Initial funding:</strong> {formatUsdcShort(parseUsdcUnits(form.fundAmount) ?? 0n)}</p>
               <div className="rounded-lg bg-[var(--surface-muted)] px-3 py-2 text-xs text-[var(--subtle)] mt-2 space-y-1">
-                <p>A simulation will run first. Your wallet opens only if simulation passes.</p>
-                <p>Provider and quote signer are immutable — verify addresses before confirming.</p>
+                <p>A simulation runs first — your wallet only opens if simulation passes.</p>
+                <p>Provider C and quote signer D are immutable once the session is created.</p>
+                <p>Owner A cannot be changed after creation.</p>
               </div>
             </div>
           }
