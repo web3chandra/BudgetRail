@@ -4,15 +4,18 @@
   "installCommand": "bun install",
   "framework": "vite",
   "functions": {
-    "api/*.ts": { "runtime": "@vercel/node@5" }
+    "api/*.ts":          { "runtime": "@vercel/node@5" },
+    "api/quotes/v2.ts":  { "runtime": "@vercel/node@5" },
+    "api/fulfill/v2.ts": { "runtime": "@vercel/node@5" }
   },
-  "rewrites": [
-    { "source": "/api/rpc",        "destination": "/api/rpc" },
-    { "source": "/api/health",     "destination": "/api/health" },
-    { "source": "/api/quotes/v2",  "destination": "/api/quotes/v2" },
-    { "source": "/api/fulfill/v2", "destination": "/api/fulfill/v2" },
-    { "source": "/api/quotes",     "destination": "/api/quotes" },
-    { "source": "/api/fulfill",    "destination": "/api/fulfill" },
-    { "source": "/(.*)",           "destination": "/index.html" }
+  "routes": [
+    { "src": "/api/rpc",        "dest": "/api/rpc" },
+    { "src": "/api/health",     "dest": "/api/health" },
+    { "src": "/api/quotes/v2",  "dest": "/api/quotes/v2" },
+    { "src": "/api/fulfill/v2", "dest": "/api/fulfill/v2" },
+    { "src": "/api/quotes",     "dest": "/api/quotes" },
+    { "src": "/api/fulfill",    "dest": "/api/fulfill" },
+    { "handle": "filesystem" },
+    { "src": "/(.*)",           "dest": "/index.html" }
   ]
 }
