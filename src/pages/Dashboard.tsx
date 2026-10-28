@@ -6,22 +6,29 @@
 import { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { useAccount, useReadContract, useReadContracts, usePublicClient } from "wagmi";
-import { erc20Abi } from "viem";
-import { arcTestnet } from "viem/chains";
+import { erc20Abi, parseAbiItem } from "viem";
 import { PlusCircle, RefreshCw, ChevronLeft, ChevronRight, Zap, UserCheck } from "lucide-react";
 import { ConnectKitButton } from "connectkit";
+import { ARC } from "@/lib/arcProfile";
 import { getUsdc } from "@/onchain-facts";
 import { formatUsdcShort, formatAddr, formatTs, sessionStatus, isExpired } from "@/lib/format";
-import { BUDGET_RAIL_ABI, BUDGET_RAIL_ADDRESS, type SessionTuple } from "@/lib/budgetRail";
+import { BUDGET_RAIL_ABI, BUDGET_RAIL_ADDRESS, DEPLOY_BLOCK_TESTNET, type SessionTuple } from "@/lib/budgetRail";
 import { scanRecentEvents, type ActivityEvent } from "@/lib/historyScanner";
 import { NetworkBadge } from "@/components/NetworkGuard";
 import { TxLink, AddrLink } from "@/components/ExplorerLink";
 import { SkeletonCard, EmptyState, ErrorBanner, StatusBadge } from "@/components/shared";
 import { SessionNavLink } from "@/components/Layout";
 
-const CHAIN_ID = arcTestnet.id;
-const USDC     = getUsdc(CHAIN_ID)!;
+// Use the active network profile — never hardcode arcTestnet.id.
+const CHAIN_ID  = ARC.chainId;
+const USDC      = getUsdc(CHAIN_ID)!;
 const PAGE_SIZE = 5;
+
+// Full 8-input SessionCreated event — produces the correct topic0.
+// The 3-input inline ABI used previously generated a different topic0 and returned zero logs.
+const SESSION_CREATED_EVENT = parseAbiItem(
+  "event SessionCreated(uint256 indexed sessionId, address indexed owner, address indexed agent, address provider, address quoteSigner, uint96 maxBudget, uint96 perPaymentCap, uint64 expiresAt)"
+);
 
 // ── Hooks ──────────────────────────────────────────────────────────────────
 
@@ -72,8 +79,12 @@ function useSessionBatch(ids: bigint[] | undefined) {
 
 // ── Hook: sessions where connected wallet is agent B ──────────────────────
 // Scans ALL SessionCreated logs for agent == address (from contract deploy block).
-// Re-runs every time the agent address changes.
-const DEPLOY_BLOCK = 67_538_363n; // BudgetRail V1 deploy block
+// Uses the FULL 8-input canonical ABI so topic0 matches what the contract emits.
+// Re-runs every time the agent address or publicClient changes.
+// AbortController generation guard prevents stale async results from landing
+// after a wallet switch.
+
+const AGENT_SCAN_WINDOW = 10_000n;
 
 function useAgentSessions(agent: `0x${string}` | undefined) {
   const publicClient = usePublicClient({ chainId: CHAIN_ID });
@@ -81,69 +92,97 @@ function useAgentSessions(agent: `0x${string}` | undefined) {
   const [loading, setLoading]       = useState(false);
   const [scanError, setScanError]   = useState<string | null>(null);
   const [coverage, setCoverage]     = useState<{ scanned: bigint; head: bigint } | null>(null);
-  const prevAgent = useRef<string | undefined>(undefined);
+  // generation counter — incremented on every scan start so stale closures self-abort
+  const genRef = useRef(0);
 
   useEffect(() => {
     if (!agent || !publicClient) {
       setSessionIds([]);
       setScanError(null);
       setCoverage(null);
-      prevAgent.current = undefined;
       return;
     }
-    // Re-fetch whenever the wallet address changes
-    if (prevAgent.current === agent.toLowerCase()) return;
-    prevAgent.current = agent.toLowerCase();
+
+    // Bump generation — any in-flight scan from a previous address will detect
+    // that its generation is stale and discard its results.
+    const myGen = ++genRef.current;
+    const abort = new AbortController();
 
     setSessionIds([]);
     setScanError(null);
     setCoverage(null);
     setLoading(true);
+
     void (async () => {
+      const failedWindows: string[] = [];
       try {
         const head = await publicClient.getBlockNumber();
+        if (abort.signal.aborted || genRef.current !== myGen) return;
+
         const allIds: bigint[] = [];
-        const WINDOW = 10_000n;
-        let lastScanned = DEPLOY_BLOCK;
-        for (let from = DEPLOY_BLOCK; from <= head; from += WINDOW) {
-          const to = from + WINDOW - 1n > head ? head : from + WINDOW - 1n;
-          try {
-            const logs = await publicClient.getLogs({
-              address: BUDGET_RAIL_ADDRESS,
-              event: {
-                type: "event",
-                name: "SessionCreated",
-                inputs: [
-                  { name: "sessionId", type: "uint256", indexed: true },
-                  { name: "owner",     type: "address",  indexed: true },
-                  { name: "agent",     type: "address",  indexed: true },
-                ],
-              },
-              args:      { agent },
-              fromBlock: from,
-              toBlock:   to,
-            });
-            for (const l of logs) {
-              const id = (l.args as { sessionId?: bigint }).sessionId;
-              if (id !== undefined) allIds.push(id);
+        let lastScanned = DEPLOY_BLOCK_TESTNET;
+
+        for (let from = DEPLOY_BLOCK_TESTNET; from <= head; from += AGENT_SCAN_WINDOW) {
+          if (abort.signal.aborted || genRef.current !== myGen) return;
+
+          const to = from + AGENT_SCAN_WINDOW - 1n > head
+            ? head
+            : from + AGENT_SCAN_WINDOW - 1n;
+
+          let attempt = 0;
+          let succeeded = false;
+          while (attempt < 3 && !succeeded) {
+            try {
+              // SESSION_CREATED_EVENT = parseAbiItem of the full 8-input definition.
+              // topic0 = keccak256("SessionCreated(uint256,address,address,address,address,uint96,uint96,uint64)")
+              // The old 3-input inline ABI produced a DIFFERENT topic0 → zero logs returned.
+              const logs = await publicClient.getLogs({
+                address:   BUDGET_RAIL_ADDRESS,
+                event:     SESSION_CREATED_EVENT,
+                args:      { agent },
+                fromBlock: from,
+                toBlock:   to,
+              });
+              if (abort.signal.aborted || genRef.current !== myGen) return;
+              for (const l of logs) {
+                const id = l.args.sessionId;
+                if (id !== undefined) allIds.push(id);
+              }
+              lastScanned = to;
+              succeeded = true;
+            } catch {
+              attempt++;
+              if (attempt < 3) {
+                await new Promise(r => setTimeout(r, 800 * Math.pow(2, attempt - 1)));
+              }
             }
-            lastScanned = to;
-          } catch {
-            // Window failed — continue scanning remaining windows
-            setScanError(`Scan partial: some blocks could not be read. Results may be incomplete.`);
+          }
+          if (!succeeded) {
+            failedWindows.push(`${from}-${to}`);
           }
         }
-        // Deduplicate and sort ascending
+
+        if (genRef.current !== myGen) return;
+
         const unique = [...new Map(allIds.map(id => [id.toString(), id])).values()]
           .sort((a, b) => (a < b ? -1 : 1));
         setSessionIds(unique);
         setCoverage({ scanned: lastScanned, head });
+        if (failedWindows.length > 0) {
+          setScanError(
+            `Scan partial: ${failedWindows.length} window(s) failed — results may be incomplete.`
+          );
+        }
       } catch (err) {
-        setScanError(err instanceof Error ? err.message : "RPC error during agent session scan");
+        if (genRef.current !== myGen) return;
+        const msg = err instanceof Error ? err.message : "RPC error during agent session scan";
+        setScanError(msg);
       } finally {
-        setLoading(false);
+        if (genRef.current === myGen) setLoading(false);
       }
     })();
+
+    return () => { abort.abort(); };
   }, [agent, publicClient]);
 
   return { sessionIds, loading, scanError, coverage };
@@ -278,7 +317,7 @@ export function Dashboard() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="display font-bold text-2xl text-[var(--ink)] tracking-tight">Dashboard</h1>
-          <p className="text-sm text-[var(--subtle)] mt-1">Manage USDC payment sessions on Arc Testnet</p>
+          <p className="text-sm text-[var(--subtle)] mt-1">Manage USDC payment sessions on {ARC.chainName}</p>
         </div>
         <div className="flex items-center gap-3">
           <NetworkBadge />
@@ -432,7 +471,7 @@ export function Dashboard() {
           </div>
           <p className="text-xs text-[var(--subtle)] mb-3">
             Sessions where <span className="mono">{address && formatAddr(address)}</span> is authorized as agent B — you can pay for API calls from these in the Playground.
-            Identity verified from onchain <span className="mono">SessionCreated</span> logs (V1 contract, block {DEPLOY_BLOCK.toString()}+).
+            Identity verified from onchain <span className="mono">SessionCreated</span> logs (V1 contract, block {DEPLOY_BLOCK_TESTNET.toString()}+).
           </p>
 
           {/* Coverage / error badge */}
@@ -445,7 +484,7 @@ export function Dashboard() {
           )}
           {!agentLoading && !agentScanError && agentCoverage && (
             <p className="text-xs text-[var(--subtle)] mb-3">
-              Scan complete: blocks {DEPLOY_BLOCK.toString()} — {agentCoverage.head.toString()}.
+              Scan complete: blocks {DEPLOY_BLOCK_TESTNET.toString()} — {agentCoverage.head.toString()}.
               {agentCoverage.scanned < agentCoverage.head && (
                 <span className="text-amber-400"> (some windows failed — data may be partial)</span>
               )}

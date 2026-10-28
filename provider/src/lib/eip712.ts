@@ -126,6 +126,8 @@ export function generateRequestId(): `0x${string}` {
 export interface PaymentQuoteV2 {
   sessionId:   bigint;
   requestId:   `0x${string}`; // bytes32
+  /** SHA-256(exact UTF-8 bytes of input) — binds quote to paid content. */
+  requestHash: `0x${string}`; // bytes32 — INCLUDED IN SIGNED DATA (P0 fix)
   baseAmount:  bigint;
   feeAmount:   bigint;
   grossAmount: bigint;
@@ -159,11 +161,16 @@ export function buildDomainV2(chainId: number, contractAddress: `0x${string}`) {
   };
 }
 
-/** Field order MUST match BudgetRailV2.sol typehash. */
+/**
+ * Field order MUST match BudgetRailV2.sol typehash exactly.
+ * requestHash is SHA-256(exact UTF-8 input) — binds the signed quote to paid content.
+ * P0 fix: requestHash added after requestId; all downstream signing uses this type.
+ */
 export const PAYMENT_QUOTE_V2_TYPES = {
   PaymentQuoteV2: [
     { name: "sessionId",   type: "uint256" },
     { name: "requestId",   type: "bytes32" },
+    { name: "requestHash", type: "bytes32" },  // P0 fix: content binding
     { name: "baseAmount",  type: "uint256" },
     { name: "feeAmount",   type: "uint256" },
     { name: "grossAmount", type: "uint256" },
@@ -210,6 +217,7 @@ export async function signQuoteV2(
     message: {
       sessionId:   quote.sessionId,
       requestId:   quote.requestId,
+      requestHash: quote.requestHash,  // P0 fix: now included in signed data
       baseAmount:  quote.baseAmount,
       feeAmount:   quote.feeAmount,
       grossAmount: quote.grossAmount,

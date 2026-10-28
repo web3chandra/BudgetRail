@@ -249,7 +249,7 @@ function normalizeQuoteV2(raw: Record<string, unknown>): SignedQuoteV2 {
     baseAmount,
     feeAmount,
     grossAmount,
-    quoteDeadline:      BigInt(String(raw["quoteDeadline"])),
+    deadline:           BigInt(String(raw["deadline"])),
     signature:          String(raw["signature"])          as `0x${string}`,
     chainId:            Number(raw["chainId"]),
     contractAddress:    String(raw["contractAddress"])    as `0x${string}`,
@@ -337,8 +337,8 @@ export async function verifyQuoteV2(
   }
   // Deadline
   const now = BigInt(Math.floor(Date.now() / 1000));
-  if (quote.quoteDeadline < now) {
-    throw new BudgetRailError("QUOTE_EXPIRED", `V2 quote deadline ${quote.quoteDeadline} in the past (now=${now})`);
+  if (quote.deadline < now) {
+    throw new BudgetRailError("QUOTE_EXPIRED", `V2 quote deadline ${quote.deadline} in the past (now=${now})`);
   }
   // requestHash
   const expectedHash = await computeRequestHash(inputText);
@@ -348,31 +348,36 @@ export async function verifyQuoteV2(
   // EIP-712 signature — V2 domain version "2", includes treasury
   const recovered = await recoverTypedDataAddress({
     domain: {
-      name:              "BudgetRailV2",
+      name:              "BudgetRail",   // EIP712("BudgetRail", "2") in BudgetRailV2.sol constructor
       version:           "2",
       chainId:           quote.chainId,
       verifyingContract: quote.contractAddress,
     },
+    // Field order MUST match updated _PAYMENT_QUOTE_V2_TYPEHASH in BudgetRailV2.sol exactly.
     types: {
       PaymentQuoteV2: [
-        { name: "sessionId",      type: "uint256" },
-        { name: "requestId",      type: "bytes32" },
-        { name: "requestHash",    type: "bytes32" },
-        { name: "baseAmount",     type: "uint256" },
-        { name: "feeAmount",      type: "uint256" },
-        { name: "treasury",       type: "address" },
-        { name: "quoteDeadline",  type: "uint64"  },
+        { name: "sessionId",   type: "uint256" },
+        { name: "requestId",   type: "bytes32" },
+        { name: "requestHash", type: "bytes32" },
+        { name: "baseAmount",  type: "uint256" },
+        { name: "feeAmount",   type: "uint256" },
+        { name: "grossAmount", type: "uint256" },
+        { name: "deadline",    type: "uint256" },
+        { name: "provider",    type: "address" },
+        { name: "treasury",    type: "address" },
       ],
     },
     primaryType: "PaymentQuoteV2",
     message: {
-      sessionId:     quote.sessionId,
-      requestId:     quote.requestId,
-      requestHash:   quote.requestHash,
-      baseAmount:    quote.baseAmount,
-      feeAmount:     quote.feeAmount,
-      treasury:      quote.treasuryAddress,
-      quoteDeadline: quote.quoteDeadline,
+      sessionId:   quote.sessionId,
+      requestId:   quote.requestId,
+      requestHash: quote.requestHash,
+      baseAmount:  quote.baseAmount,
+      feeAmount:   quote.feeAmount,
+      grossAmount: quote.grossAmount,
+      deadline:    quote.deadline,
+      provider:    quote.providerPayout,
+      treasury:    quote.treasuryAddress,
     },
     signature: quote.signature,
   });

@@ -27,7 +27,7 @@ import {
   usePublicClient,
 } from "wagmi";
 import { erc20Abi, decodeEventLog } from "viem";
-import { arcTestnet } from "viem/chains";
+import { ARC } from "@/lib/arcProfile";
 import { getUsdc } from "@/onchain-facts";
 import {
   BUDGET_RAIL_ABI,
@@ -37,7 +37,8 @@ import {
 } from "@/lib/budgetRail";
 import { parseOnchainError } from "@/lib/parseOnchainError";
 
-const CHAIN_ID = arcTestnet.id;
+// Use the active network profile chain ID — never hardcode arcTestnet.id here.
+const CHAIN_ID = ARC.chainId;
 const USDC = getUsdc(CHAIN_ID)!;
 
 // ── Types ─────────────────────────────────────────────────────────────────

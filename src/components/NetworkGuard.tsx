@@ -1,11 +1,14 @@
 /**
  * NetworkGuard — blocks children if the connected wallet is on the wrong chain.
- * Shows a "Switch to Arc Testnet" banner instead.
+ * Uses ARC.chainId from the active network profile (testnet or mainnet).
+ * Never hardcodes arcTestnet.id so a mainnet build works without code changes.
  */
 import { useAccount, useSwitchChain } from "wagmi";
-import { arcTestnet } from "viem/chains";
+import { ARC } from "@/lib/arcProfile";
 
-const TARGET_CHAIN_ID = arcTestnet.id;
+// Resolved at module load from the active ARC profile — never hardcoded.
+const TARGET_CHAIN_ID   = ARC.chainId;
+const TARGET_CHAIN_NAME = ARC.chainName;
 
 interface NetworkGuardProps {
   children: React.ReactNode;
@@ -25,7 +28,7 @@ export function NetworkGuard({ children, readOnly = false }: NetworkGuardProps) 
         <div>
           <p className="font-semibold text-[var(--danger)] text-sm">Wrong network</p>
           <p className="text-[var(--muted)] text-xs mt-0.5">
-            This app requires Arc Testnet (chain {TARGET_CHAIN_ID}). You are on chain {chainId}.
+            This app requires {TARGET_CHAIN_NAME} (chain {TARGET_CHAIN_ID}). You are on chain {chainId}.
           </p>
         </div>
         <button
@@ -34,7 +37,7 @@ export function NetworkGuard({ children, readOnly = false }: NetworkGuardProps) 
           className="shrink-0 rounded-lg bg-[var(--danger)] px-4 py-2 text-sm font-semibold text-white
                      hover:opacity-90 disabled:opacity-50 transition-opacity"
         >
-          {isPending ? "Switching..." : "Switch to Arc Testnet"}
+          {isPending ? "Switching..." : `Switch to ${TARGET_CHAIN_NAME}`}
         </button>
       </div>
     );
@@ -56,7 +59,7 @@ export function NetworkBadge() {
         }`}
     >
       <span className={`w-1.5 h-1.5 rounded-full ${onArc && isConnected ? "bg-[var(--success)]" : "bg-[var(--subtle)]"}`} />
-      {isConnected ? (onArc ? "Arc Testnet" : `Chain ${chainId}`) : "Not connected"}
+      {isConnected ? (onArc ? TARGET_CHAIN_NAME : `Chain ${chainId}`) : "Not connected"}
     </span>
   );
 }

@@ -19,9 +19,9 @@
 | 0-D | Git remote URL credential token revoked (P0-B) | ☐ PENDING |
 | 0-E | Independent security review of `BudgetRail.sol` and `BudgetRailV2.sol` completed | ☐ PENDING |
 | 0-F | Treasury E address decided and SEPARATE from provider C address | ☐ PENDING |
-| 0-G | All Foundry tests pass: `forge test` → 60/60 | ☐ DONE (verified Parts 06+10) |
-| 0-H | Provider tests pass: 108/108 | ☐ DONE (verified Part 07) |
-| 0-I | Frontend lint/typecheck: 0 errors | ☐ DONE (verified Part 12) |
+| 0-G | All Foundry tests pass: `forge test` → 119/119 | ☐ DONE (verified Part 11) |
+| 0-H | Provider tests pass: ~150/150 | ☐ DONE (verified Part 11) |
+| 0-I | Frontend lint/typecheck: 0 errors | ☐ DONE (verified Part 11) |
 | 0-J | Public HTTPS provider backend deployed and `/api/health` reachable | ☐ PENDING |
 | 0-K | Public frontend URL live | ☐ PENDING |
 
@@ -321,18 +321,29 @@ curl -X POST https://<PROVIDER_URL>/api/quotes/v2 \
 
 ### Step 6.4 — Pay (agent wallet B)
 
+The V2 function signature is (added in Part 04 — requestHash binds the quote to the exact input):
+```
+payForRequestV2(uint256 sessionId, uint256 baseAmount, uint256 feeAmount,
+                bytes32 requestId, bytes32 requestHash, uint64 deadline, bytes sig)
+```
+
 ```bash
+# requestHash = SHA-256 of the exact UTF-8 bytes of the input document
+# Obtain requestHash from the /api/quotes/v2 response body field "requestHash"
 cast send <V2_ADDRESS> \
-  "payForRequestV2(uint256,uint256,uint256,bytes32,uint64,bytes)" \
-  <SESSION_ID> 50000 250 <REQUEST_ID> <DEADLINE> <SIGNATURE> \
+  "payForRequestV2(uint256,uint256,uint256,bytes32,bytes32,uint64,bytes)" \
+  <SESSION_ID> 50000 250 <REQUEST_ID> <REQUEST_HASH> <DEADLINE> <SIGNATURE> \
   --rpc-url https://rpc.mainnet.arc.io \
   --private-key <AGENT_B_KEY>
 # Pass criteria:
-#   PaymentSettledV2 event: baseAmount=50000, feeAmount=250, grossAmount=50250
+#   PaymentSettledV2 event: requestHash=<REQUEST_HASH>, baseAmount=50000, feeAmount=250, grossAmount=50250
 #   Transfer log 1: from contract, to <PROVIDER_C_ADDRESS>, value=50000
 #   Transfer log 2: from contract, to <TREASURY_E_ADDRESS>, value=250
 #   session.totalSpent increases by exactly 50250
 ```
+
+IMPORTANT: Never omit `requestHash`. A quote signed without `requestHash` in the EIP-712 struct
+is invalid — the contract's ECDSA recovery will fail and the transaction will revert.
 
 ### Step 6.5 — Fulfill
 

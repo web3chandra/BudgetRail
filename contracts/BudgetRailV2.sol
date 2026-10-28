@@ -67,9 +67,12 @@ contract BudgetRailV2 is ReentrancyGuard, EIP712 {
     // ── EIP-712 typehash ─────────────────────────────────────────────────────
 
     /// @dev V2 typehash. Distinct from V1 ("PaymentQuote") — cross-version replay is structurally impossible.
+    /// requestHash = SHA-256(exact UTF-8 bytes of the input document) — binds the quote to the
+    /// exact paid content so the provider cannot fulfill a different document against the same receipt.
     bytes32 private constant _PAYMENT_QUOTE_V2_TYPEHASH = keccak256(
-        "PaymentQuoteV2(uint256 sessionId,bytes32 requestId,uint256 baseAmount,uint256 feeAmount,"
-        "uint256 grossAmount,uint256 deadline,address provider,address treasury)"
+        "PaymentQuoteV2(uint256 sessionId,bytes32 requestId,bytes32 requestHash,"
+        "uint256 baseAmount,uint256 feeAmount,uint256 grossAmount,uint256 deadline,"
+        "address provider,address treasury)"
     );
 
     // ── Storage ──────────────────────────────────────────────────────────────
@@ -157,10 +160,13 @@ contract BudgetRailV2 is ReentrancyGuard, EIP712 {
 
     /// @notice Emitted on each successful payForRequestV2. Distinct from V1's PaymentSettled.
     /// Indexers MUST NOT conflate this event with V1's PaymentSettled.
+    /// requestHash = SHA-256(exact UTF-8 bytes of paid input) — binds this settlement to
+    /// the exact content authorized onchain. Required for fulfillment verification.
     event PaymentSettledV2(
         uint256 indexed sessionId,
         bytes32 indexed requestId,
         address indexed agent,
+        bytes32 requestHash,      // SHA-256(input) — onchain content binding
         address provider,         // C — received baseAmount
         address treasury,         // E — received feeAmount
         uint256 baseAmount,       // provider earnings
@@ -306,6 +312,8 @@ contract BudgetRailV2 is ReentrancyGuard, EIP712 {
     /// @param baseAmount       Provider's base price. C receives this exactly.
     /// @param feeAmount        Platform fee. Must equal floor(baseAmount * 50 / 10_000). E receives this.
     /// @param requestId        Unique request identifier. Replaying a used requestId reverts.
+    /// @param requestHash      SHA-256(exact UTF-8 bytes of the input document). Binds the signed quote
+    ///                         to the exact content being purchased. Included in EIP-712 struct and event.
     /// @param deadline         Quote expiry (unix timestamp). Must be >= block.timestamp and <= session.expiresAt.
     /// @param providerSignature EIP-712 signature by session.quoteSigner over PaymentQuoteV2 struct.
     function payForRequestV2(
@@ -313,6 +321,7 @@ contract BudgetRailV2 is ReentrancyGuard, EIP712 {
         uint256 baseAmount,
         uint256 feeAmount,
         bytes32 requestId,
+        bytes32 requestHash,
         uint64  deadline,
         bytes calldata providerSignature
     ) external nonReentrant {
@@ -347,12 +356,14 @@ contract BudgetRailV2 is ReentrancyGuard, EIP712 {
         if (_usedRequestIds[globalReqKey])        revert RequestAlreadyUsed();
 
         // ── EIP-712 signature verification ────────────────────────────────────
-        // treasury must match TREASURY immutable; including it in the signed data
-        // prevents a compromised backend from redirecting fees to a different address.
+        // requestHash is SHA-256(input) — binds this payment to the exact content.
+        // treasury must match TREASURY immutable — prevents fee redirection.
+        // Field order MUST match _PAYMENT_QUOTE_V2_TYPEHASH string exactly.
         bytes32 structHash = keccak256(abi.encode(
             _PAYMENT_QUOTE_V2_TYPEHASH,
             sessionId,
             requestId,
+            requestHash,
             baseAmount,
             feeAmount,
             grossAmount,
@@ -376,6 +387,7 @@ contract BudgetRailV2 is ReentrancyGuard, EIP712 {
             sessionId,
             requestId,
             msg.sender,   // agent B
+            requestHash,  // SHA-256(input) — onchain content binding
             provider_,
             TREASURY,
             baseAmount,

@@ -104,11 +104,32 @@ V1 Explorer: https://explorer.testnet.arc.io/address/0xf6a13df15ad93c2e2968e1d69
 
 | Suite | Result |
 |-------|--------|
-| Foundry V1 | 3/3 pass (+ invariant) |
-| Foundry V2 | 60/60 pass (unit + invariant + C=E guard) |
-| Provider | 108/108 pass |
-| SDK | 66/66 pass |
-| Frontend | 0 errors, 0 warnings |
+| Foundry (V1 + V2 unit + invariants) | 119/119 pass |
+| Provider (V1) | all pass |
+| Provider (V2) | 39/39 pass — Part 04 requestHash fixture update applied |
+| Provider fee-math | 15/15 pass — Part 05 |
+| Provider HTTP smoke | 22/22 pass — Part 06 |
+| SDK | all pass |
+| Part 07+08 regression | 54/54 pass — network isolation, role logic, bigint arithmetic |
+| Frontend lint + typecheck | 0 errors, 0 warnings |
+| bun test (all) | 524/525 pass — 1 pre-existing localhost:3001 integration fail |
+
+**Parts 09+10 (COMPLETE):**
+- `provider/src/lib/onchain.ts` — `readSession` + `readSessionV2` now propagate RPC errors instead of swallowing them; callers correctly return 503 on RPC failure instead of 404 "not found"
+- `.github/workflows/ci.yml` — added `secret-scan` job (gitleaks full-history) and `abi-consistency` job (forge inspect selectors); corrected test count comments
+- `docs/SECURITY-AUDIT-PART09.md` — full audit report: secrets inventory, Solidity review, API audit, economic logic, CI, docs accuracy, mainnet GO/NO-GO
+- `docs/QA-REGRESSION-REPORT.md` — per-subsystem PASS/FAIL/BLOCKED with live onchain evidence (sessions #20/#21 read directly from Arc Testnet), manual real-testnet tx checklist
+
+**Part 11 (COMPLETE — mainnet preflight, runbook, release):**
+- `docs/GO-NOGO-MATRIX.md` — fully rewritten with current test counts (119/119 Foundry, 524/525 bun), Parts 09/10 fixes reflected, critical path to grant submission updated for Oct 27 date
+- `docs/MAINNET-DEPLOY-RUNBOOK.md` — fixed critical bug: Gate 6.4 `payForRequestV2` was missing `requestHash` parameter (added in Part 04); updated stale test counts; added explicit IMPORTANT warning about requestHash
+- `evidence/mainnet.json` — added `sourceHash_sha256` for both contracts (verified via sha256sum Part 11), ABI selector table for V1 and V2 (from forge inspect), duplicate v1Contract stub removed
+- `docs/VIDEO-STORYBOARD.md` — new: 8-scene 2:30 demo storyboard covering Owner→Agent→Provider→Treasury→Refund flow, honest version/chain labelling, micro-fee disclosure
+- `docs/PUBLIC-RELEASE-CHECKLIST.md` — updated stale test counts (60→119 Foundry, 108→150 provider)
+- Contract source hashes (Part 11): BudgetRail.sol=be9ff649..., BudgetRailV2.sol=94f4e3cf...
+- ABI selectors verified: V1 payForRequest=62f7482a, V2 payForRequestV2=0814315c (distinct — correct)
+- Arc grant requirements: web search rate-limited; known facts confirmed from existing docs; operator must independently verify current official criteria at arc.io before submission
+- **Final test counts: 524/525 bun, 119/119 Foundry, 0 lint errors, 0 typecheck errors**
 
 ---
 
@@ -128,6 +149,35 @@ V1 Explorer: https://explorer.testnet.arc.io/address/0xf6a13df15ad93c2e2968e1d69
 | 10 | Security audit | Done |
 | 11 | Testnet preflight | Done |
 | 12 | Mainnet + grant prep | Done |
+
+**Part 04 (current session — P0 security fix — COMPLETE):**
+- `BudgetRailV2.sol` — `_PAYMENT_QUOTE_V2_TYPEHASH` and `payForRequestV2` now include `bytes32 requestHash`; `PaymentSettledV2` emits it as a non-indexed field
+- `provider/src/lib/eip712.ts` — `PaymentQuoteV2` interface + `PAYMENT_QUOTE_V2_TYPES` include `requestHash`; `signQuoteV2` passes it
+- `provider/src/routes/quotesV2.ts` — passes `requestHash` to `signQuoteV2`
+- `provider/src/routes/fulfillV2.ts` — verifies `settled.requestHash` (onchain event) against SHA-256(input)
+- `provider/src/lib/onchain.ts` — `BUDGET_RAIL_V2_ABI` event + decoder updated for new field order
+- `packages/sdk/src/abi.ts`, `types.ts`, `pay.ts`, `read.ts` — all updated; `quoteDeadline` → `deadline`
+- `packages/sdk/src/quote.ts` — `normalizeQuoteV2` and `verifyQuoteV2` updated; domain name corrected to "BudgetRail"; typehash field order matches contract
+- `contracts/test/BudgetRailV2.t.sol` — `QUOTE_V2_TYPEHASH`, `_sign()`, `_signBase()`, `_pay()`, all call sites, EVT-01 decode, handler typehash all updated
+- `provider/test/fulfillV2.test.ts` — `makePaymentSettledV2Log` and `makeQuoteV2` fixtures updated with `requestHash`; `REQUEST_HASH` constant added
+- `vercel.json` — P0-V2-REWRITE fixed: `/api/quotes/v2` → `/api/quotes/v2`; `/api/fulfill/v2` → `/api/fulfill/v2` (not the non-existent `/api/quotesV2`/`/api/fulfillV2`)
+
+**Parts 05+06 (COMPLETE):**
+- `provider/src/lib/config.ts` — Private key format validation at startup; C==E mainnet hard-fail guard
+- `api/rpc.ts` — `BLOCKED_METHODS` (eth_sendRawTransaction, eth_sendTransaction); `fetchWithRetry` with 600ms backoff on 429/503
+- `src/pages/Playground.tsx` — Confirm modal: V2 shows base/fee/gross breakdown instead of single "USDC charge"
+- `provider/test/feeArithmetic.test.ts` — 15 new fee-arithmetic unit tests (boundaries 199/200/201, large values, invariants)
+- `provider/test/httpSmoke.test.ts` — 22 new HTTP smoke tests (health, V1/V2 routes, segregation, config validation)
+
+**Parts 07+08 (COMPLETE):**
+- `src/components/NetworkGuard.tsx` — Uses `ARC.chainId` + `ARC.chainName` (was hardcoded arcTestnet.id / "Arc Testnet")
+- `src/hooks/useSessionFlow.ts` — `CHAIN_ID = ARC.chainId` (removed arcTestnet import)
+- `src/pages/CreateBudget.tsx` — `CHAIN_ID = ARC.chainId`; chain label dynamic (removed arcTestnet import)
+- `src/pages/ManageSession.tsx` — `CHAIN_ID = ARC.chainId` (removed arcTestnet import)
+- `src/pages/Dashboard.tsx` — `CHAIN_ID = ARC.chainId`; subtitle uses `ARC.chainName` (removed arcTestnet import)
+- `src/pages/Playground.tsx` — `CHAIN_ID = ARC.chainId`; wrong-network message dynamic (removed arcTestnet import)
+- `src/config.ts` — Imports Arc Mainnet as `arc as arcMainnet` (was `arcMainnet` — non-existent export); includes Arc Mainnet transport
+- `src/test/part07part08Regression.test.ts` — 54 new tests: role logic, bigint arithmetic, network isolation, arcProfile guards
 
 ---
 

@@ -42,7 +42,7 @@ The smart contract enforces every rule. No server can override it.
 │  USDC ERC-20: 0x3600000000000000000000000000000000000000            │
 │  (6 decimals — all amounts in this system use 6-decimal units)      │
 └─────────────────────────────────────────────────────────────────────┘
-         ▲  pay(sig)                          ▲  RPC reads
+         ▲  payForRequest(sig)                 ▲  RPC reads
          │                                   │
 ┌────────┴──────────┐          ┌─────────────┴───────────────────────┐
 │  Agent B          │          │  Provider API  (Vercel serverless)   │
@@ -123,7 +123,7 @@ STEP 2 — Agent B requests a quote (no USDC moves yet)
   Returns: {sessionId, amount, nonce, requestId, requestHash, deadline, signature}
 
 STEP 3 — Agent B pays (USDC moves from contract to Provider C)
-  Agent → BudgetRail.pay(sessionId, requestId, requestHash, amount, deadline, sig)
+  Agent → BudgetRail.payForRequest(sessionId, requestId, requestHash, amount, quoteDeadline, sig)
   Contract verifies:
     msg.sender == session.agent (B)           ← agent check
     recover(sig) == session.quoteSigner (D)   ← quote integrity
@@ -184,7 +184,7 @@ STEP 5 — Owner A closes session and recovers unspent funds
 2. Pastes a document (723 bytes), clicks "Get Quote"
 3. Frontend calls `POST /api/quotes` — server checks session onchain, signs quote for $0.05
 4. Quote card appears: amount $0.05, valid for 10 minutes
-5. Agent clicks "Pay" — wallet prompts once: `BudgetRail.pay(...)`
+5. Agent clicks "Pay" — wallet prompts once: `BudgetRail.payForRequest(...)`
 6. Contract verifies all 6 conditions (see Money Flow Step 3 above)
 7. $0.05 transfers from contract → `0x7D76` (Provider C)
 8. Frontend calls `POST /api/fulfill` with the tx hash — server verifies independently

@@ -29,8 +29,8 @@ import {
   useSwitchChain,
 } from "wagmi";
 import { decodeEventLog } from "viem";
-import { arcTestnet } from "viem/chains";
 import { Info, AlertTriangle, Copy, CheckCircle2, ChevronDown, ChevronUp, RotateCcw } from "lucide-react";
+import { ARC } from "@/lib/arcProfile";
 
 import { BUDGET_RAIL_ABI, BUDGET_RAIL_ADDRESS, PROVIDER_API_URL, PROVIDER_CONFIGURED, providerConfigError } from "@/lib/budgetRail";
 import { VersionBanner } from "@/components/VersionBanner";
@@ -42,7 +42,8 @@ import { TxLink } from "@/components/ExplorerLink";
 import { ErrorBanner, ConfirmModal, StatusBadge } from "@/components/shared";
 import { toast } from "sonner";
 
-const CHAIN_ID     = arcTestnet.id;
+// Use the active network profile — never hardcode arcTestnet.id.
+const CHAIN_ID     = ARC.chainId;
 const MAX_INPUT_BYTES = 8192;
 // localStorage key version — bump to invalidate stale recovery state
 const RECOVERY_KEY_VERSION = "v1";
@@ -183,7 +184,7 @@ function classifyError(raw: string, context: "quote" | "pay" | "fulfill"): Class
   }
   if (context === "pay") {
     if (msg.includes("wrong network") || msg.includes("chain"))
-      return { code: "WRONG_NETWORK", userMessage: "Wrong network.", retryable: true, action: "Switch your wallet to Arc Testnet (chain 5042002)." };
+      return { code: "WRONG_NETWORK", userMessage: "Wrong network.", retryable: true, action: `Switch your wallet to ${ARC.chainName} (chain ${ARC.chainId}).` };
     if (msg.includes("notagent") || msg.includes("not agent") || msg.includes("unauthorized"))
       return { code: "WRONG_AGENT", userMessage: "Connected wallet is not the authorized agent for this session.", retryable: false, action: "Switch to the agent wallet shown in the session details." };
     if (msg.includes("quotesigner") || msg.includes("quote signer") || msg.includes("badsig") || msg.includes("bad sig") || msg.includes("signature"))
@@ -1128,7 +1129,15 @@ export function Playground() {
           body={
             <div className="space-y-2 text-sm">
               <p><strong>Service:</strong> Document Insights v1</p>
-              <p><strong>USDC charge:</strong> <span className="tabular">{formatUsdcShort(BigInt(flow.quote.amount))}</span></p>
+              {flow.quote.version === "2" && flow.quote.baseAmount && flow.quote.feeAmount ? (
+                <>
+                  <p><strong>Provider base (C):</strong> <span className="tabular">{formatUsdcShort(BigInt(flow.quote.baseAmount))}</span></p>
+                  <p><strong>Platform fee 0.5% (E):</strong> <span className="tabular">{formatUsdcShort(BigInt(flow.quote.feeAmount))}</span></p>
+                  <p><strong>Gross charge (base + fee):</strong> <span className="tabular">{formatUsdcShort(BigInt(flow.quote.amount))}</span></p>
+                </>
+              ) : (
+                <p><strong>USDC charge (V1 — no fee):</strong> <span className="tabular">{formatUsdcShort(BigInt(flow.quote.amount))}</span></p>
+              )}
               <p><strong>Provider receives:</strong> <span className="mono">{formatAddr(flow.quote.providerPayout)}</span></p>
               <p><strong>Session:</strong> #{flow.quote.sessionId}</p>
               <p><strong>Quote valid:</strong> {Math.max(0, Number(flow.quote.quoteDeadline) - Math.floor(Date.now() / 1000))}s remaining</p>

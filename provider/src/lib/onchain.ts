@@ -50,21 +50,25 @@ export function makeClient(config: Config) {
 
 // ── Read session ──────────────────────────────────────────────────────────
 
+/**
+ * Read a V1 session from chain.
+ * Returns null when the session does not exist (owner == address(0)).
+ * THROWS when the RPC call itself fails (network error, timeout, non-contract address).
+ * Callers must distinguish the two cases: null → 404, thrown error → 503.
+ */
 export async function readSession(config: Config, sessionId: bigint): Promise<Session | null> {
   const client = makeClient(config);
-  try {
-    const result = await client.readContract({
-      address: config.contractAddress,
-      abi: BUDGET_RAIL_ABI,
-      functionName: "getSession",
-      args: [sessionId],
-    }) as unknown as Session;
-    // Zero owner means session does not exist
-    if (result.owner === "0x0000000000000000000000000000000000000000") return null;
-    return result;
-  } catch {
-    return null;
-  }
+  // Let RPC errors propagate — do NOT swallow them with a bare catch.
+  // The route handlers catch separately and return 503 on RPC failure.
+  const result = await client.readContract({
+    address: config.contractAddress,
+    abi: BUDGET_RAIL_ABI,
+    functionName: "getSession",
+    args: [sessionId],
+  }) as unknown as Session;
+  // Zero owner means session does not exist (contract returns zero-value struct).
+  if (result.owner === "0x0000000000000000000000000000000000000000") return null;
+  return result;
 }
 
 // ── Fetch transaction receipt ──────────────────────────────────────────────
@@ -186,7 +190,8 @@ export const BUDGET_RAIL_V2_ABI = parseAbi([
   "function FEE_BPS() view returns (uint256)",
   "function USDC_ADDRESS() view returns (address)",
   // V2 Events — distinct from V1; do NOT use V1 decoder on these logs
-  "event PaymentSettledV2(uint256 indexed sessionId,bytes32 indexed requestId,address indexed agent,address provider,address treasury,uint256 baseAmount,uint256 feeAmount,uint256 grossAmount,uint256 remainingBalance)",
+  // requestHash = SHA-256(input) — P0 fix: onchain content binding
+  "event PaymentSettledV2(uint256 indexed sessionId,bytes32 indexed requestId,address indexed agent,bytes32 requestHash,address provider,address treasury,uint256 baseAmount,uint256 feeAmount,uint256 grossAmount,uint256 remainingBalance)",
   "event SessionCreated(uint256 indexed sessionId,address indexed owner,address indexed agent,address provider,address quoteSigner,uint256 maxBudget,uint256 perPaymentCap,uint64 expiresAt)",
   "event SessionFunded(uint256 indexed sessionId,address indexed funder,uint256 grossAmount,uint256 totalFunded)",
   "event SessionClosed(uint256 indexed sessionId,address indexed owner,uint256 refundAmount,uint256 totalSpent)",
@@ -206,25 +211,27 @@ export interface SessionV2 {
   closed:        boolean;
 }
 
-/** Read a V2 session from chain. Returns null if session does not exist or RPC fails. */
+/**
+ * Read a V2 session from chain.
+ * Returns null when the session does not exist (owner == address(0)).
+ * THROWS when the RPC call itself fails (network error, timeout, wrong contract).
+ * Callers must distinguish the two: null → 404, thrown error → 503.
+ */
 export async function readSessionV2(
   config: Config,
   v2ContractAddress: `0x${string}`,
   sessionId: bigint,
 ): Promise<SessionV2 | null> {
   const client = makeClient(config);
-  try {
-    const result = await client.readContract({
-      address: v2ContractAddress,
-      abi:     BUDGET_RAIL_V2_ABI,
-      functionName: "getSession",
-      args:    [sessionId],
-    }) as unknown as SessionV2;
-    if (result.owner === "0x0000000000000000000000000000000000000000") return null;
-    return result;
-  } catch {
-    return null;
-  }
+  // Let RPC errors propagate — do NOT swallow them.
+  const result = await client.readContract({
+    address: v2ContractAddress,
+    abi:     BUDGET_RAIL_V2_ABI,
+    functionName: "getSession",
+    args:    [sessionId],
+  }) as unknown as SessionV2;
+  if (result.owner === "0x0000000000000000000000000000000000000000") return null;
+  return result;
 }
 
 /**
@@ -251,6 +258,8 @@ export interface DecodedPaymentSettledV2 {
   sessionId:        bigint;
   requestId:        `0x${string}`;
   agent:            `0x${string}`;
+  /** SHA-256(input) — P0 fix: now present onchain for fulfillment verification. */
+  requestHash:      `0x${string}`;
   provider:         `0x${string}`;
   treasury:         `0x${string}`;
   baseAmount:       bigint;
@@ -270,6 +279,7 @@ export function decodePaymentSettledV2Log(log: Log): DecodedPaymentSettledV2 | n
     });
     const args = decoded.args as {
       sessionId: bigint; requestId: `0x${string}`; agent: `0x${string}`;
+      requestHash: `0x${string}`;
       provider: `0x${string}`; treasury: `0x${string}`;
       baseAmount: bigint; feeAmount: bigint; grossAmount: bigint; remainingBalance: bigint;
     };
@@ -277,6 +287,7 @@ export function decodePaymentSettledV2Log(log: Log): DecodedPaymentSettledV2 | n
       sessionId:        args.sessionId,
       requestId:        args.requestId.toLowerCase() as `0x${string}`,
       agent:            args.agent.toLowerCase() as `0x${string}`,
+      requestHash:      args.requestHash.toLowerCase() as `0x${string}`,
       provider:         args.provider.toLowerCase() as `0x${string}`,
       treasury:         args.treasury.toLowerCase() as `0x${string}`,
       baseAmount:       args.baseAmount,

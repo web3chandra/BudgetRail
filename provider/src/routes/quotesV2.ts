@@ -132,11 +132,15 @@ export async function handleQuotesV2(config: Config, req: Request): Promise<Resp
   const requestId = generateRequestId();
 
   // ── 14. Sign V2 quote ─────────────────────────────────────────────────────
+  // P0 fix: requestHash is now in the EIP-712 signed struct — it binds the
+  // quote cryptographically to the exact input bytes. An attacker cannot
+  // reuse this (requestId, txHash) pair for a different document.
   let signature: `0x${string}`;
   try {
     signature = await signQuoteV2(config, v2Contract, {
       sessionId,
       requestId,
+      requestHash,         // P0 fix: now in signed data, not just response body
       baseAmount,
       feeAmount,
       grossAmount,

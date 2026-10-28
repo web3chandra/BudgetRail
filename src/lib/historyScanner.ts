@@ -133,7 +133,7 @@ interface Checkpoint {
   contract:    string;
   fromBlock:   string;
   toBlock:     string;
-  events:      ActivityEvent[];
+  events:      ActivityEventWire[];
   savedAt:     number;
 }
 
@@ -187,43 +187,69 @@ export function clearCheckpoint(chainId: number, contract: string, fromBlock: bi
   try { localStorage.removeItem(cacheKey(chainId, contract, fromBlock)); } catch { /* */ }
 }
 
-// Bigint fields need string round-trip for JSON.
-function serializeEvent(e: ActivityEvent): ActivityEvent {
+// ── Wire representation for JSON persistence ─────────────────────────────────
+// ActivityEvent contains bigint fields that JSON.stringify cannot handle natively.
+// We convert every bigint to its decimal string representation before storage
+// and reconstruct on load. If any field is left as a bigint, JSON.stringify
+// throws TypeError which the saveCheckpoint catch silently discards — meaning
+// checkpoints are NEVER saved. This wire type is the fix.
+
+type StringifiedBigint = string; // discriminator for clarity in the wire type
+
+interface ActivityEventWire extends Omit<ActivityEvent,
+  | "sessionId" | "blockNumber" | "maxBudget" | "perPaymentCap" | "expiresAt"
+  | "fundAmount" | "totalFunded" | "amount" | "quoteDeadline" | "refunded" | "totalSpent"
+> {
+  sessionId:     StringifiedBigint;
+  blockNumber:   StringifiedBigint;
+  maxBudget?:    StringifiedBigint;
+  perPaymentCap?: StringifiedBigint;
+  expiresAt?:    StringifiedBigint;
+  fundAmount?:   StringifiedBigint;
+  totalFunded?:  StringifiedBigint;
+  amount?:       StringifiedBigint;
+  quoteDeadline?: StringifiedBigint;
+  refunded?:     StringifiedBigint;
+  totalSpent?:   StringifiedBigint;
+}
+
+// Convert bigint fields → decimal strings so JSON.stringify succeeds.
+function serializeEvent(e: ActivityEvent): ActivityEventWire {
+  const s = (v: bigint | undefined): StringifiedBigint | undefined =>
+    v === undefined ? undefined : v.toString();
   return {
     ...e,
-    sessionId:    e.sessionId,
-    blockNumber:  e.blockNumber,
-    maxBudget:    e.maxBudget,
-    perPaymentCap: e.perPaymentCap,
-    expiresAt:    e.expiresAt,
-    fundAmount:   e.fundAmount,
-    totalFunded:  e.totalFunded,
-    amount:       e.amount,
-    quoteDeadline: e.quoteDeadline,
-    refunded:     e.refunded,
-    totalSpent:   e.totalSpent,
+    sessionId:     e.sessionId.toString(),
+    blockNumber:   e.blockNumber.toString(),
+    maxBudget:     s(e.maxBudget),
+    perPaymentCap: s(e.perPaymentCap),
+    expiresAt:     s(e.expiresAt),
+    fundAmount:    s(e.fundAmount),
+    totalFunded:   s(e.totalFunded),
+    amount:        s(e.amount),
+    quoteDeadline: s(e.quoteDeadline),
+    refunded:      s(e.refunded),
+    totalSpent:    s(e.totalSpent),
   };
 }
 
-function deserializeEvent(e: ActivityEvent): ActivityEvent {
-  // Events stored in JSON lose bigint — this recovers them from the raw object.
-  function b(v: unknown): bigint | undefined {
-    if (v === undefined || v === null) return undefined;
-    try { return BigInt(v as string | number); } catch { return undefined; }
-  }
+function deserializeEvent(e: ActivityEventWire): ActivityEvent {
+  // Recover bigint fields from their decimal string wire representation.
+  const b = (v: string | undefined): bigint | undefined =>
+    v === undefined ? undefined : BigInt(v);
   return {
     ...e,
-    sessionId:    BigInt(e.sessionId),
-    blockNumber:  BigInt(e.blockNumber),
-    maxBudget:    b(e.maxBudget),
+    sessionId:     BigInt(e.sessionId),
+    blockNumber:   BigInt(e.blockNumber),
+    maxBudget:     b(e.maxBudget),
     perPaymentCap: b(e.perPaymentCap),
-    expiresAt:    b(e.expiresAt),
-    fundAmount:   b(e.fundAmount),
-    totalFunded:  b(e.totalFunded),
-    amount:       b(e.amount),
+    expiresAt:     b(e.expiresAt),
+    fundAmount:    b(e.fundAmount),
+    totalFunded:   b(e.totalFunded),
+    amount:        b(e.amount),
     quoteDeadline: b(e.quoteDeadline),
-    refunded:     b(e.refunded),
-    totalSpent:   b(e.totalSpent),
+    refunded:      b(e.refunded),
+    totalSpent:    b(e.totalSpent),
   };
 }
 

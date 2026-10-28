@@ -19,8 +19,8 @@ import {
   useWaitForTransactionReceipt, useSwitchChain,
 } from "wagmi";
 import { erc20Abi, decodeEventLog } from "viem";
-import { arcTestnet } from "viem/chains";
 import { ArrowLeft, AlertTriangle, ShieldAlert, PlusCircle, Info, Zap, Copy, Check } from "lucide-react";
+import { ARC } from "@/lib/arcProfile";
 import { getUsdc } from "@/onchain-facts";
 import { BUDGET_RAIL_ABI, BUDGET_RAIL_ADDRESS, QUOTE_SIGNER, type SessionTuple } from "@/lib/budgetRail";
 import { formatUsdcShort, formatAddr, formatTs, isExpired, sessionStatus } from "@/lib/format";
@@ -34,7 +34,8 @@ import { OwnershipProof } from "@/components/OwnershipProof";
 import { VersionBanner } from "@/components/VersionBanner";
 import { toast } from "sonner";
 
-const CHAIN_ID = arcTestnet.id;
+// Use the active network profile — never hardcode arcTestnet.id.
+const CHAIN_ID = ARC.chainId;
 const USDC     = getUsdc(CHAIN_ID)!;
 
 // ── Parse helpers (bigint-only, no floating-point) ─────────────────────────

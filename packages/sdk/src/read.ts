@@ -374,22 +374,25 @@ export function decodePaymentSettledV2Log(
       data:      log.data,
       topics:    log.topics,
     });
+    // Field order matches updated BUDGET_RAIL_V2_ABI PaymentSettledV2 event (P0 fix).
+    // agent is indexed[2], requestHash is data[0], remainingBalance replaces quoteDeadline.
     const args = decoded.args as {
-      sessionId: bigint; requestId: `0x${string}`; provider: `0x${string}`;
-      treasury: `0x${string}`; requestHash: `0x${string}`; agent: `0x${string}`;
-      baseAmount: bigint; feeAmount: bigint; grossAmount: bigint; quoteDeadline: bigint;
+      sessionId: bigint; requestId: `0x${string}`; agent: `0x${string}`;
+      requestHash: `0x${string}`;
+      provider: `0x${string}`; treasury: `0x${string}`;
+      baseAmount: bigint; feeAmount: bigint; grossAmount: bigint; remainingBalance: bigint;
     };
     return {
-      sessionId:     args.sessionId,
-      requestId:     args.requestId.toLowerCase()   as `0x${string}`,
-      provider:      args.provider.toLowerCase()    as `0x${string}`,
-      treasury:      args.treasury.toLowerCase()    as `0x${string}`,
-      requestHash:   args.requestHash.toLowerCase() as `0x${string}`,
-      agent:         args.agent.toLowerCase()       as `0x${string}`,
-      baseAmount:    args.baseAmount,
-      feeAmount:     args.feeAmount,
-      grossAmount:   args.grossAmount,
-      quoteDeadline: args.quoteDeadline,
+      sessionId:        args.sessionId,
+      requestId:        args.requestId.toLowerCase()   as `0x${string}`,
+      agent:            args.agent.toLowerCase()       as `0x${string}`,
+      requestHash:      args.requestHash.toLowerCase() as `0x${string}`,
+      provider:         args.provider.toLowerCase()    as `0x${string}`,
+      treasury:         args.treasury.toLowerCase()    as `0x${string}`,
+      baseAmount:       args.baseAmount,
+      feeAmount:        args.feeAmount,
+      grossAmount:      args.grossAmount,
+      remainingBalance: args.remainingBalance,
     };
   } catch {
     return null;

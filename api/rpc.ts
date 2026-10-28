@@ -43,6 +43,19 @@ function resolveRpcUrl(): { url: string; source: string } | null {
 const MAX_BODY = 512 * 1024; // 512 KB
 const TIMEOUT_MS = 10_000;   // 10 s
 
+/**
+ * JSON-RPC methods that MUST NOT be proxied through a public server endpoint.
+ * Allowing these would let anyone broadcast transactions via the server's RPC
+ * without knowing the upstream RPC URL or token.
+ *
+ * The proxy is intended for READ-ONLY calls (eth_call, eth_blockNumber, etc.).
+ * Any transaction broadcast must go through the user's own wallet connection.
+ */
+const BLOCKED_METHODS = new Set([
+  "eth_sendRawTransaction",
+  "eth_sendTransaction",
+]);
+
 async function fetchWithTimeout(url: string, body: string): Promise<Response> {
   const ctrl  = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
@@ -56,6 +69,20 @@ async function fetchWithTimeout(url: string, body: string): Promise<Response> {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Retry once on 429 (rate-limited) and 503 (upstream temporarily unavailable),
+ * with a 600ms backoff. Only retries GET-equivalent JSON-RPC read calls.
+ * Never retries writes (guarded by BLOCKED_METHODS above).
+ */
+async function fetchWithRetry(url: string, body: string): Promise<Response> {
+  const res = await fetchWithTimeout(url, body);
+  if (res.status === 429 || res.status === 503) {
+    await new Promise<void>((r) => setTimeout(r, 600));
+    return fetchWithTimeout(url, body);
+  }
+  return res;
 }
 
 export default async function handler(
@@ -91,10 +118,28 @@ export default async function handler(
   const body = JSON.stringify(req.body);
   if (body.length > MAX_BODY) { res.status(413).json({ error: "Request too large" }); return; }
 
+  // Block write methods — the proxy is read-only.
+  // Check both single-request and batch-request shapes.
+  try {
+    const parsed = req.body as Record<string, unknown> | Array<Record<string, unknown>>;
+    const methods = Array.isArray(parsed)
+      ? parsed.map((r) => String(r["method"] ?? ""))
+      : [String((parsed as Record<string, unknown>)["method"] ?? "")];
+    for (const method of methods) {
+      if (BLOCKED_METHODS.has(method)) {
+        res.status(403).json({
+          error: `Method ${method} is not allowed via this proxy. ` +
+            "Transaction broadcasting must go through your wallet connection directly.",
+        });
+        return;
+      }
+    }
+  } catch { /* parse failure falls through to upstream */ }
+
   const { url: rpcUrl, source } = rpcResolved;
 
   try {
-    const upstream = await fetchWithTimeout(rpcUrl, body);
+    const upstream = await fetchWithRetry(rpcUrl, body);
 
     if (!upstream.ok) {
       const text = await upstream.text().catch(() => "");

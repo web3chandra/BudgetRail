@@ -203,6 +203,7 @@ export const DEPLOY_BLOCK_TESTNET = 67538363n;
 
 export const BUDGET_RAIL_V2_ABI = [
   // ── Read ──────────────────────────────────────────────────────────────────
+  // V2 uses uint256 for all amounts (not uint96 like V1)
   {
     type: "function", name: "getSession",
     inputs:  [{ name: "sessionId", type: "uint256" }],
@@ -211,10 +212,10 @@ export const BUDGET_RAIL_V2_ABI = [
       { name: "agent",         type: "address" },
       { name: "provider",      type: "address" },
       { name: "quoteSigner",   type: "address" },
-      { name: "maxBudget",     type: "uint96"  },
-      { name: "perPaymentCap", type: "uint96"  },
-      { name: "totalFunded",   type: "uint96"  },
-      { name: "totalSpent",    type: "uint96"  },
+      { name: "maxBudget",     type: "uint256" },
+      { name: "perPaymentCap", type: "uint256" },
+      { name: "totalFunded",   type: "uint256" },
+      { name: "totalSpent",    type: "uint256" },
       { name: "expiresAt",     type: "uint64"  },
       { name: "closed",        type: "bool"    },
     ]}],
@@ -223,7 +224,7 @@ export const BUDGET_RAIL_V2_ABI = [
   {
     type: "function", name: "availableBalance",
     inputs:  [{ name: "sessionId", type: "uint256" }],
-    outputs: [{ name: "", type: "uint96" }],
+    outputs: [{ name: "", type: "uint256" }],
     stateMutability: "view",
   },
   {
@@ -281,11 +282,11 @@ export const BUDGET_RAIL_V2_ABI = [
     type: "function", name: "payForRequestV2",
     inputs: [
       { name: "sessionId",         type: "uint256" },
+      { name: "baseAmount",        type: "uint256" },
+      { name: "feeAmount",         type: "uint256" },
       { name: "requestId",         type: "bytes32" },
       { name: "requestHash",       type: "bytes32" },
-      { name: "baseAmount",        type: "uint96"  },
-      { name: "feeAmount",         type: "uint96"  },
-      { name: "quoteDeadline",     type: "uint64"  },
+      { name: "deadline",          type: "uint64"  },
       { name: "providerSignature", type: "bytes"   },
     ],
     outputs: [],
@@ -318,18 +319,20 @@ export const BUDGET_RAIL_V2_ABI = [
   { type: "error", name: "TreasuryTransferFailed",     inputs: [] },
   // ── Events ─────────────────────────────────────────────────────────────────
   {
+    // PaymentSettledV2 — field order MUST match BudgetRailV2.sol emit exactly.
+    // P0 fix: requestHash is now non-indexed field after agent (indexed[2]).
     type: "event", name: "PaymentSettledV2",
     inputs: [
-      { name: "sessionId",    type: "uint256", indexed: true  },
-      { name: "requestId",    type: "bytes32", indexed: true  },
-      { name: "provider",     type: "address", indexed: true  },
-      { name: "treasury",     type: "address", indexed: false },
-      { name: "requestHash",  type: "bytes32", indexed: false },
-      { name: "agent",        type: "address", indexed: false },
-      { name: "baseAmount",   type: "uint96",  indexed: false },
-      { name: "feeAmount",    type: "uint96",  indexed: false },
-      { name: "grossAmount",  type: "uint96",  indexed: false },
-      { name: "quoteDeadline",type: "uint64",  indexed: false },
+      { name: "sessionId",        type: "uint256", indexed: true  },
+      { name: "requestId",        type: "bytes32", indexed: true  },
+      { name: "agent",            type: "address", indexed: true  },
+      { name: "requestHash",      type: "bytes32", indexed: false },
+      { name: "provider",         type: "address", indexed: false },
+      { name: "treasury",         type: "address", indexed: false },
+      { name: "baseAmount",       type: "uint256", indexed: false },
+      { name: "feeAmount",        type: "uint256", indexed: false },
+      { name: "grossAmount",      type: "uint256", indexed: false },
+      { name: "remainingBalance", type: "uint256", indexed: false },
     ],
   },
   {

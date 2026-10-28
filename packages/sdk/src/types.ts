@@ -270,6 +270,7 @@ export interface SignedQuoteV2 {
   version: "2";
   sessionId: bigint;
   requestId: `0x${string}`;
+  /** SHA-256(input) — included in EIP-712 signed struct (P0 fix). */
   requestHash: `0x${string}`;
   /** Provider base price (C receives this). */
   baseAmount: bigint;
@@ -277,7 +278,8 @@ export interface SignedQuoteV2 {
   feeAmount: bigint;
   /** Gross = base + fee. Session is debited this amount. */
   grossAmount: bigint;
-  quoteDeadline: bigint;
+  /** Quote expiry unix timestamp. Field name matches contract payForRequestV2 param. */
+  deadline: bigint;
   signature: `0x${string}`;
   chainId: number;
   contractAddress: `0x${string}`;
@@ -293,14 +295,15 @@ export interface SignedQuoteV2 {
 export interface PaymentSettledV2Event {
   sessionId: bigint;
   requestId: `0x${string}`;
+  agent: `0x${string}`;
+  /** SHA-256(input) — P0 fix: now onchain and verified. */
+  requestHash: `0x${string}`;
   provider: `0x${string}`;
   treasury: `0x${string}`;
-  requestHash: `0x${string}`;
-  agent: `0x${string}`;
   baseAmount: bigint;
   feeAmount: bigint;
   grossAmount: bigint;
-  quoteDeadline: bigint;
+  remainingBalance: bigint;
 }
 
 export interface PaymentResultV2 {

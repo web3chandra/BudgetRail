@@ -189,6 +189,17 @@ export async function handleFulfillV2(config: Config, req: Request): Promise<Res
     return err(400, `PaymentSettledV2.sessionId ${settled.sessionId} != quote.sessionId ${sessionId}`);
   if (settled.requestId.toLowerCase() !== requestId)
     return err(400, "PaymentSettledV2.requestId does not match quote.requestId");
+
+  // P0 fix: verify requestHash from onchain PaymentSettledV2 event (not unsigned quote field).
+  // The onchain value was signed by D and recorded in the contract — it cannot be forged.
+  // An attacker submitting a different input+requestHash against an old txHash is rejected here.
+  if (settled.requestHash.toLowerCase() !== computedHash)
+    return err(400,
+      "PaymentSettledV2.requestHash (onchain) does not match SHA-256(input). " +
+      "The input submitted does not match what was authorized onchain. " +
+      "This is a permanent mismatch — do NOT retry with a different document."
+    );
+
   if (settled.provider.toLowerCase() !== config.providerPayoutAddress.toLowerCase())
     return err(400, "PaymentSettledV2.provider does not match this server's payout address");
   if (settled.treasury.toLowerCase() !== config.treasuryAddress.toLowerCase())

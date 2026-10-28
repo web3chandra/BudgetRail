@@ -10,8 +10,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAccount, useReadContract, useSwitchChain } from "wagmi";
 import { erc20Abi } from "viem";
-import { arcTestnet } from "viem/chains";
 import { AlertTriangle, Users, Info } from "lucide-react";
+import { ARC } from "@/lib/arcProfile";
 import { getUsdc } from "@/onchain-facts";
 import {
   BUDGET_RAIL_ADDRESS,
@@ -37,7 +37,8 @@ import { V2_CONFIGURED } from "@/lib/budgetRail";
 import { computeFeeV2 } from "@/lib/budgetRailV2";
 import { toast } from "sonner";
 
-const CHAIN_ID = arcTestnet.id;
+// Use the active network profile — never hardcode arcTestnet.id.
+const CHAIN_ID = ARC.chainId;
 const USDC     = getUsdc(CHAIN_ID)!;
 
 // ── Validation ────────────────────────────────────────────────────────────
@@ -624,7 +625,7 @@ export function CreateBudget() {
             {/* Contract address confirmation */}
             <div className="text-xs text-[var(--subtle)] text-center">
               Contract: <span className="mono">{BUDGET_RAIL_ADDRESS}</span>
-              {" · "}Arc Testnet chain {CHAIN_ID}
+              {" · "}{ARC.chainName} chain {CHAIN_ID}
             </div>
           </>
         )}

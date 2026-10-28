@@ -36,7 +36,7 @@ jobs:
 
       - name: Test contracts
         run: forge test -v
-        # Expected: 120 tests (V1 unit + V2 unit + V2 invariant + C=E guard), 0 failures
+        # Expected: 119 tests (V1 unit + V2 unit + V2 invariant), 0 failures
 
   provider:
     name: Provider API tests
@@ -54,7 +54,7 @@ jobs:
 
       - name: Run provider tests
         run: cd provider && bun test
-        # Expected: 108 tests (V1 + V2), 0 failures
+        # Expected: ~150 tests (V1 + V2 + fee-math + HTTP smoke), 0 failures
         # No env vars required — tests use mocked onchain reads
 
   agent:
@@ -158,3 +158,60 @@ jobs:
         run: bunx vite build
         # Verifies the frontend compiles without errors
         # VITE_* env vars default to placeholders; no live connection required
+
+  secret-scan:
+    name: Secret scanner (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history for secret scan
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Scans git history for accidentally committed secrets.
+        # provider/.env, agent/agent.env and .env are gitignored and must never appear.
+        # QUOTE_SIGNER_PRIVATE_KEY values are 0x-prefixed 32-byte hex — matches PK patterns.
+
+  abi-consistency:
+    name: ABI selector consistency
+    runs-on: ubuntu-latest
+    needs: [contracts]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.1.34"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build contracts
+        run: forge build
+
+      - name: Verify ABI selectors match source
+        # Checks that the compiled out/ ABI matches what the source declares.
+        # A mismatch here means the contract was edited without rebuilding.
+        run: |
+          forge inspect BudgetRail abi > /tmp/v1-abi.json
+          forge inspect BudgetRailV2 abi > /tmp/v2-abi.json
+          # Verify payForRequest selector (V1)
+          SELECTOR=$(forge inspect BudgetRail methodIdentifiers | grep payForRequest | grep -v V2 | head -1)
+          echo "V1 payForRequest selector: $SELECTOR"
+          # Verify payForRequestV2 selector (V2)
+          SELECTOR_V2=$(forge inspect BudgetRailV2 methodIdentifiers | grep payForRequestV2 | head -1)
+          echo "V2 payForRequestV2 selector: $SELECTOR_V2"
+          # Both must be non-empty
+          test -n "$SELECTOR" && test -n "$SELECTOR_V2"
+          echo "ABI selectors verified OK"

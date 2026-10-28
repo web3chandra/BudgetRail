@@ -70,6 +70,16 @@ export function loadConfig() {
   // Use "*" only for local dev; production must use an explicit origin.
   const allowedOrigin = optionalEnv("ALLOWED_ORIGIN", "*");
 
+  // ── Private key format validation ────────────────────────────────────────
+  // Validate at startup so a misconfigured key fails immediately rather than
+  // crashing mid-request inside signQuoteV2. Must be 0x-prefixed 32-byte hex.
+  if (!/^0x[0-9a-fA-F]{64}$/.test(quoteSignerPrivateKey)) {
+    throw new Error(
+      "QUOTE_SIGNER_PRIVATE_KEY is not a valid 0x-prefixed 32-byte hex string. " +
+      "Ensure it starts with 0x and is exactly 66 characters (0x + 64 hex digits)."
+    );
+  }
+
   // ── V2 config (optional — omit if not yet deployed) ──────────────────────
   // V2 contract address: required env var when V2 is active; empty string means V2 disabled.
   const v2ContractAddress = optionalEnv("BUDGET_RAIL_V2_ADDRESS", "").toLowerCase() as `0x${string}`;
@@ -77,6 +87,28 @@ export function loadConfig() {
   // Treasury E — immutable in the V2 contract; server MUST verify it matches at startup.
   // Public address only; never a private key.
   const treasuryAddress = optionalEnv("TREASURY_ADDRESS", "").toLowerCase() as `0x${string}`;
+
+  // ── C == E mainnet guard ───────────────────────────────────────────────────
+  // On mainnet, the platform fee cannot be separated from provider revenue if
+  // treasury E == provider C, because TREASURY is immutable. Warn on testnet;
+  // hard-fail on mainnet if both are configured and equal.
+  // The check is against the payout address (runtime config), not providerHint
+  // (deploy-time constructor arg). This catches the most common misconfig:
+  // an operator copying the payout address into TREASURY_ADDRESS for mainnet.
+  if (
+    network === "mainnet" &&
+    treasuryAddress &&
+    treasuryAddress !== ("0x" as `0x${string}`) &&
+    providerPayoutAddress &&
+    treasuryAddress === providerPayoutAddress
+  ) {
+    throw new Error(
+      "[MAINNET C==E GUARD] TREASURY_ADDRESS equals PROVIDER_PAYOUT_ADDRESS on mainnet. " +
+      "Deploy with a separate treasury wallet so fee revenue is distinguishable from " +
+      "provider payouts. The TREASURY address is immutable in the V2 contract — " +
+      "redeploy with distinct C and E addresses before going to mainnet."
+    );
+  }
 
   // V2 base price per call (6 decimals). Defaults to same as V1.
   const v2PricePerCall = BigInt(optionalEnv("V2_PRICE_PER_CALL_BASE_UNITS",

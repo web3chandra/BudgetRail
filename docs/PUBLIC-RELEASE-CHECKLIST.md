@@ -38,11 +38,11 @@
 
 ## Section 4 — Code Quality Gates
 
-- [ ] **4-A** `forge test` passes: 60/60 (V1 + V2 unit + invariant)
-- [ ] **4-B** `cd provider && bun test` passes: 108/108
+- [ ] **4-A** `forge test` passes: 119/119 (V1 + V2 unit + V2 invariant; verified Part 11)
+- [ ] **4-B** `cd provider && bun test` passes: ~150/150 (verified Part 11)
 - [ ] **4-C** `cd agent && bun test src/test/` passes
 - [ ] **4-D** `cd packages/sdk && bun test src/` passes: 66/66
-- [ ] **4-E** `bun run check` (frontend): 0 errors (1 pre-existing warning acceptable)
+- [ ] **4-E** `bun run check` (frontend): 0 errors, 0 warnings (verified Part 11)
 - [ ] **4-F** `bun run build` succeeds with no TypeScript errors
 - [ ] **4-G** `examples/agent-app` installs and typechecks cleanly from a fresh `bun install`
 

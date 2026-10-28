@@ -72,10 +72,11 @@ contract BudgetRailV2Test is Test {
     bytes32 constant REQ2       = bytes32(uint256(2));
     bytes32 constant HASH1      = keccak256("request body 1");
 
-    // V2 typehash — must match BudgetRailV2 exactly
+    // V2 typehash — must match BudgetRailV2 exactly (P0 fix: requestHash added after requestId)
     bytes32 constant QUOTE_V2_TYPEHASH = keccak256(
-        "PaymentQuoteV2(uint256 sessionId,bytes32 requestId,uint256 baseAmount,uint256 feeAmount,"
-        "uint256 grossAmount,uint256 deadline,address provider,address treasury)"
+        "PaymentQuoteV2(uint256 sessionId,bytes32 requestId,bytes32 requestHash,"
+        "uint256 baseAmount,uint256 feeAmount,uint256 grossAmount,uint256 deadline,"
+        "address provider,address treasury)"
     );
 
     // ── setUp ─────────────────────────────────────────────────────────────────
@@ -105,10 +106,12 @@ contract BudgetRailV2Test is Test {
         ));
     }
 
+    // P0 fix: _sign now includes reqHash, matching updated typehash field order.
     function _sign(
         uint256 pk,
         uint256 sid,
         bytes32 reqId,
+        bytes32 reqHash,
         uint256 base,
         uint256 fee,
         uint256 gross,
@@ -118,7 +121,7 @@ contract BudgetRailV2Test is Test {
     ) internal view returns (bytes memory sig) {
         bytes32 sh = keccak256(abi.encode(
             QUOTE_V2_TYPEHASH,
-            sid, reqId,
+            sid, reqId, reqHash,
             base, fee, gross,
             uint256(dl),
             provider,
@@ -130,12 +133,12 @@ contract BudgetRailV2Test is Test {
     }
 
     /// Sign with standard key, auto-compute fee/gross from base.
-    function _signBase(uint256 sid, bytes32 reqId, uint256 base, uint64 dl)
+    function _signBase(uint256 sid, bytes32 reqId, bytes32 reqHash, uint256 base, uint64 dl)
         internal view returns (bytes memory, uint256 fee, uint256 gross)
     {
         fee   = (base * 50) / 10_000;
         gross = base + fee;
-        return (_sign(SIGNER_PK, sid, reqId, base, fee, gross, dl, PROVIDER, TREASURY), fee, gross);
+        return (_sign(SIGNER_PK, sid, reqId, reqHash, base, fee, gross, dl, PROVIDER, TREASURY), fee, gross);
     }
 
     /// Full session: create + approve + fund.
@@ -162,10 +165,12 @@ contract BudgetRailV2Test is Test {
     }
 
     /// Execute payForRequestV2 as AGENT with base amount, auto-compute fee/gross.
+    /// reqHash = keccak256(reqId) serves as a deterministic stand-in for SHA-256(input) in tests.
     function _pay(uint256 sid, bytes32 reqId, uint256 base, uint64 dl) internal {
-        (bytes memory sig, uint256 fee, uint256 gross) = _signBase(sid, reqId, base, dl);
+        bytes32 reqHash = keccak256(abi.encodePacked(reqId));
+        (bytes memory sig, uint256 fee, uint256 gross) = _signBase(sid, reqId, reqHash, base, dl);
         vm.prank(AGENT);
-        rail.payForRequestV2(sid, base, fee, reqId, dl, sig);
+        rail.payForRequestV2(sid, base, fee, reqId, reqHash, dl, sig);
         (gross); // suppress unused warning
     }
 
@@ -218,9 +223,9 @@ contract BudgetRailV2Test is Test {
         uint256 treasuryBefore = usdc.balanceOf(TREASURY);
 
         uint64 dl = _expiry();
-        bytes memory sig = _sign(SIGNER_PK, sid, REQ1, base, fee, gross, dl, PROVIDER, TREASURY);
+        bytes memory sig = _sign(SIGNER_PK, sid, REQ1, HASH1, base, fee, gross, dl, PROVIDER, TREASURY);
         vm.prank(AGENT);
-        rail.payForRequestV2(sid, base, fee, REQ1, dl, sig);
+        rail.payForRequestV2(sid, base, fee, REQ1, HASH1, dl, sig);
 
         assertEq(usdc.balanceOf(PROVIDER), 100,           "C receives full base");
         assertEq(usdc.balanceOf(TREASURY), treasuryBefore, "E receives nothing (fee=0)");
@@ -293,10 +298,10 @@ contract BudgetRailV2Test is Test {
         uint256 base2 = 50_001;
         uint256 fee2  = (base2 * 50) / 10_000; // 250
         uint256 gross2 = base2 + fee2;           // 50_251
-        bytes memory sig = _sign(SIGNER_PK, sid, REQ2, base2, fee2, gross2, _expiry(), PROVIDER, TREASURY);
+        bytes memory sig = _sign(SIGNER_PK, sid, REQ2, HASH1, base2, fee2, gross2, _expiry(), PROVIDER, TREASURY);
         vm.prank(AGENT);
         vm.expectRevert(BudgetRailV2.PerPaymentCapExceeded.selector);
-        rail.payForRequestV2(sid, base2, fee2, REQ2, _expiry(), sig);
+        rail.payForRequestV2(sid, base2, fee2, REQ2, HASH1, _expiry(), sig);
     }
 
     // FEE-09: Sufficient base, but insufficient gross (session not funded enough for gross)
@@ -308,10 +313,10 @@ contract BudgetRailV2Test is Test {
         uint256 gross = 50_250;
         // Fund and cap = base only (50,000); gross=50,250 exceeds cap → PerPaymentCapExceeded
         uint256 sid = _makeSessionCustom(OWNER, AGENT, PROVIDER, base, base, _expiry());
-        bytes memory sig = _sign(SIGNER_PK, sid, REQ1, base, fee, gross, _expiry(), PROVIDER, TREASURY);
+        bytes memory sig = _sign(SIGNER_PK, sid, REQ1, HASH1, base, fee, gross, _expiry(), PROVIDER, TREASURY);
         vm.prank(AGENT);
         vm.expectRevert(BudgetRailV2.PerPaymentCapExceeded.selector);
-        rail.payForRequestV2(sid, base, fee, REQ1, _expiry(), sig);
+        rail.payForRequestV2(sid, base, fee, REQ1, HASH1, _expiry(), sig);
 
         // Separate case: cap is large enough (100,000) but totalFunded (50,000) < gross (50,250)
         // Budget must be >= cap, so use budget=100,000 but only fund 50,000 of it.
@@ -320,10 +325,10 @@ contract BudgetRailV2Test is Test {
         uint256 sid2 = rail.createSession(AGENT, PROVIDER, quoteSigner, 100_000, 100_000, _expiry());
         vm.prank(OWNER); usdc.approve(address(rail), 50_000);
         vm.prank(OWNER); rail.fundSession(sid2, 50_000); // funded=50,000, gross=50,250 > funded
-        bytes memory sig2 = _sign(SIGNER_PK, sid2, REQ1, base, fee, gross, _expiry(), PROVIDER, TREASURY);
+        bytes memory sig2 = _sign(SIGNER_PK, sid2, REQ1, HASH1, base, fee, gross, _expiry(), PROVIDER, TREASURY);
         vm.prank(AGENT);
         vm.expectRevert(BudgetRailV2.FundedBudgetExceeded.selector);
-        rail.payForRequestV2(sid2, base, fee, REQ1, _expiry(), sig2);
+        rail.payForRequestV2(sid2, base, fee, REQ1, HASH1, _expiry(), sig2);
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -334,20 +339,20 @@ contract BudgetRailV2Test is Test {
     function test_AUTH01_wrongAgent() public {
         uint256 sid = _makeSession();
         uint256 base = 50_000;
-        (bytes memory sig, uint256 fee,) = _signBase(sid, REQ1, base, _expiry());
+        (bytes memory sig, uint256 fee,) = _signBase(sid, REQ1, HASH1, base, _expiry());
         vm.prank(ATTACKER);
         vm.expectRevert(BudgetRailV2.NotAgent.selector);
-        rail.payForRequestV2(sid, base, fee, REQ1, _expiry(), sig);
+        rail.payForRequestV2(sid, base, fee, REQ1, HASH1, _expiry(), sig);
     }
 
     // AUTH-02: Owner != agent; owner calling payForRequestV2 when B != A
     function test_AUTH02_ownerCannotPayWhenNotAgent() public {
         uint256 sid = _makeSession(); // AGENT=0x2000, OWNER=0x1000
         uint256 base = 50_000;
-        (bytes memory sig, uint256 fee,) = _signBase(sid, REQ1, base, _expiry());
+        (bytes memory sig, uint256 fee,) = _signBase(sid, REQ1, HASH1, base, _expiry());
         vm.prank(OWNER); // owner tries to pay — rejected because owner != agent
         vm.expectRevert(BudgetRailV2.NotAgent.selector);
-        rail.payForRequestV2(sid, base, fee, REQ1, _expiry(), sig);
+        rail.payForRequestV2(sid, base, fee, REQ1, HASH1, _expiry(), sig);
     }
 
     // AUTH-03: A == B (same wallet, manual demo mode) — succeeds
@@ -358,9 +363,9 @@ contract BudgetRailV2Test is Test {
         vm.prank(OWNER); rail.fundSession(sid, MAX_BUDGET);
 
         uint256 base = 50_000;
-        (bytes memory sig, uint256 fee,) = _signBase(sid, REQ1, base, _expiry());
+        (bytes memory sig, uint256 fee,) = _signBase(sid, REQ1, HASH1, base, _expiry());
         vm.prank(OWNER); // A == B, valid
-        rail.payForRequestV2(sid, base, fee, REQ1, _expiry(), sig);
+        rail.payForRequestV2(sid, base, fee, REQ1, HASH1, _expiry(), sig);
         assertEq(usdc.balanceOf(PROVIDER), base);
     }
 
@@ -389,10 +394,10 @@ contract BudgetRailV2Test is Test {
     function test_SIG01_wrongSignerKey() public {
         uint256 sid = _makeSession();
         uint256 base = 50_000; uint256 fee = 250; uint256 gross = 50_250;
-        bytes memory sig = _sign(SIGNER_PK + 1, sid, REQ1, base, fee, gross, _expiry(), PROVIDER, TREASURY);
+        bytes memory sig = _sign(SIGNER_PK + 1, sid, REQ1, HASH1, base, fee, gross, _expiry(), PROVIDER, TREASURY);
         vm.prank(AGENT);
         vm.expectRevert(BudgetRailV2.InvalidSignature.selector);
-        rail.payForRequestV2(sid, base, fee, REQ1, _expiry(), sig);
+        rail.payForRequestV2(sid, base, fee, REQ1, HASH1, _expiry(), sig);
     }
 
     // SIG-02: Replay — same requestId in same session
@@ -401,10 +406,10 @@ contract BudgetRailV2Test is Test {
         _pay(sid, REQ1, 50_000, _expiry());
 
         uint256 base = 50_000; uint256 fee = 250; uint256 gross = 50_250;
-        bytes memory sig = _sign(SIGNER_PK, sid, REQ1, base, fee, gross, _expiry(), PROVIDER, TREASURY);
+        bytes memory sig = _sign(SIGNER_PK, sid, REQ1, HASH1, base, fee, gross, _expiry(), PROVIDER, TREASURY);
         vm.prank(AGENT);
         vm.expectRevert(BudgetRailV2.RequestAlreadyUsed.selector);
-        rail.payForRequestV2(sid, base, fee, REQ1, _expiry(), sig);
+        rail.payForRequestV2(sid, base, fee, REQ1, HASH1, _expiry(), sig);
     }
 
     // SIG-03: Wrong chainId in domain
@@ -416,12 +421,12 @@ contract BudgetRailV2Test is Test {
             keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
             keccak256("BudgetRail"), keccak256("2"), block.chainid + 1, address(rail)
         ));
-        bytes32 sh = keccak256(abi.encode(QUOTE_V2_TYPEHASH, sid, REQ1, base, fee, gross, uint256(dl), PROVIDER, TREASURY));
+        bytes32 sh = keccak256(abi.encode(QUOTE_V2_TYPEHASH, sid, REQ1, HASH1, base, fee, gross, uint256(dl), PROVIDER, TREASURY));
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", wrongDomain, sh));
         (uint8 v, bytes32 r, bytes32 s_) = vm.sign(SIGNER_PK, digest);
         vm.prank(AGENT);
         vm.expectRevert(BudgetRailV2.InvalidSignature.selector);
-        rail.payForRequestV2(sid, base, fee, REQ1, dl, abi.encodePacked(r, s_, v));
+        rail.payForRequestV2(sid, base, fee, REQ1, HASH1, dl, abi.encodePacked(r, s_, v));
     }
 
     // SIG-04: Wrong verifying contract
@@ -433,12 +438,12 @@ contract BudgetRailV2Test is Test {
             keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
             keccak256("BudgetRail"), keccak256("2"), block.chainid, address(0xDEAD)
         ));
-        bytes32 sh = keccak256(abi.encode(QUOTE_V2_TYPEHASH, sid, REQ1, base, fee, gross, uint256(dl), PROVIDER, TREASURY));
+        bytes32 sh = keccak256(abi.encode(QUOTE_V2_TYPEHASH, sid, REQ1, HASH1, base, fee, gross, uint256(dl), PROVIDER, TREASURY));
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", wrongDomain, sh));
         (uint8 v, bytes32 r, bytes32 s_) = vm.sign(SIGNER_PK, digest);
         vm.prank(AGENT);
         vm.expectRevert(BudgetRailV2.InvalidSignature.selector);
-        rail.payForRequestV2(sid, base, fee, REQ1, dl, abi.encodePacked(r, s_, v));
+        rail.payForRequestV2(sid, base, fee, REQ1, HASH1, dl, abi.encodePacked(r, s_, v));
     }
 
     // SIG-05: V1 domain version rejected by V2 contract
@@ -451,12 +456,12 @@ contract BudgetRailV2Test is Test {
             keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
             keccak256("BudgetRail"), keccak256("1"), block.chainid, address(rail)
         ));
-        bytes32 sh = keccak256(abi.encode(QUOTE_V2_TYPEHASH, sid, REQ1, base, fee, gross, uint256(dl), PROVIDER, TREASURY));
+        bytes32 sh = keccak256(abi.encode(QUOTE_V2_TYPEHASH, sid, REQ1, HASH1, base, fee, gross, uint256(dl), PROVIDER, TREASURY));
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", v1Domain, sh));
         (uint8 v, bytes32 r, bytes32 s_) = vm.sign(SIGNER_PK, digest);
         vm.prank(AGENT);
         vm.expectRevert(BudgetRailV2.InvalidSignature.selector);
-        rail.payForRequestV2(sid, base, fee, REQ1, dl, abi.encodePacked(r, s_, v));
+        rail.payForRequestV2(sid, base, fee, REQ1, HASH1, dl, abi.encodePacked(r, s_, v));
     }
 
     // SIG-06: Tampered treasury address in signature
@@ -465,10 +470,10 @@ contract BudgetRailV2Test is Test {
         uint256 base = 50_000; uint256 fee = 250; uint256 gross = 50_250;
         uint64 dl = _expiry();
         // Sign with a fake treasury address
-        bytes memory sig = _sign(SIGNER_PK, sid, REQ1, base, fee, gross, dl, PROVIDER, address(0xBAD));
+        bytes memory sig = _sign(SIGNER_PK, sid, REQ1, HASH1, base, fee, gross, dl, PROVIDER, address(0xBAD));
         vm.prank(AGENT);
         vm.expectRevert(BudgetRailV2.InvalidSignature.selector);
-        rail.payForRequestV2(sid, base, fee, REQ1, dl, sig);
+        rail.payForRequestV2(sid, base, fee, REQ1, HASH1, dl, sig);
     }
 
     // SIG-07: Tampered provider address in signature
@@ -477,10 +482,10 @@ contract BudgetRailV2Test is Test {
         uint256 base = 50_000; uint256 fee = 250; uint256 gross = 50_250;
         uint64 dl = _expiry();
         // Sign with a fake provider address
-        bytes memory sig = _sign(SIGNER_PK, sid, REQ1, base, fee, gross, dl, address(0xBAD), TREASURY);
+        bytes memory sig = _sign(SIGNER_PK, sid, REQ1, HASH1, base, fee, gross, dl, address(0xBAD), TREASURY);
         vm.prank(AGENT);
         vm.expectRevert(BudgetRailV2.InvalidSignature.selector);
-        rail.payForRequestV2(sid, base, fee, REQ1, dl, sig);
+        rail.payForRequestV2(sid, base, fee, REQ1, HASH1, dl, sig);
     }
 
     // SIG-08: Caller supplies wrong feeAmount (inflated)
@@ -489,10 +494,10 @@ contract BudgetRailV2Test is Test {
         uint256 base = 50_000;
         uint256 badFee = 300; // correct is 250
         uint256 gross = base + badFee;
-        bytes memory sig = _sign(SIGNER_PK, sid, REQ1, base, badFee, gross, _expiry(), PROVIDER, TREASURY);
+        bytes memory sig = _sign(SIGNER_PK, sid, REQ1, HASH1, base, badFee, gross, _expiry(), PROVIDER, TREASURY);
         vm.prank(AGENT);
         vm.expectRevert(BudgetRailV2.InvalidFeeAmount.selector);
-        rail.payForRequestV2(sid, base, badFee, REQ1, _expiry(), sig);
+        rail.payForRequestV2(sid, base, badFee, REQ1, HASH1, _expiry(), sig);
     }
 
     // SIG-09: Caller supplies wrong feeAmount (deflated)
@@ -501,10 +506,10 @@ contract BudgetRailV2Test is Test {
         uint256 base = 50_000;
         uint256 badFee = 200; // correct is 250
         uint256 gross = base + badFee;
-        bytes memory sig = _sign(SIGNER_PK, sid, REQ1, base, badFee, gross, _expiry(), PROVIDER, TREASURY);
+        bytes memory sig = _sign(SIGNER_PK, sid, REQ1, HASH1, base, badFee, gross, _expiry(), PROVIDER, TREASURY);
         vm.prank(AGENT);
         vm.expectRevert(BudgetRailV2.InvalidFeeAmount.selector);
-        rail.payForRequestV2(sid, base, badFee, REQ1, _expiry(), sig);
+        rail.payForRequestV2(sid, base, badFee, REQ1, HASH1, _expiry(), sig);
     }
 
     // SIG-10: Expired quote deadline
@@ -512,10 +517,10 @@ contract BudgetRailV2Test is Test {
         uint256 sid = _makeSession();
         uint256 base = 50_000; uint256 fee = 250; uint256 gross = 50_250;
         uint64 pastDl = uint64(block.timestamp - 1);
-        bytes memory sig = _sign(SIGNER_PK, sid, REQ1, base, fee, gross, pastDl, PROVIDER, TREASURY);
+        bytes memory sig = _sign(SIGNER_PK, sid, REQ1, HASH1, base, fee, gross, pastDl, PROVIDER, TREASURY);
         vm.prank(AGENT);
         vm.expectRevert(BudgetRailV2.QuoteExpired.selector);
-        rail.payForRequestV2(sid, base, fee, REQ1, pastDl, sig);
+        rail.payForRequestV2(sid, base, fee, REQ1, HASH1, pastDl, sig);
     }
 
     // SIG-11: Expired session — pay and fund both revert
@@ -524,10 +529,10 @@ contract BudgetRailV2Test is Test {
         vm.warp(block.timestamp + 2 days); // past session expiry
         uint256 base = 50_000; uint256 fee = 250;
         uint64 dl = uint64(block.timestamp + 1 hours); // valid deadline but session expired
-        bytes memory sig = _sign(SIGNER_PK, sid, REQ1, base, fee, base+fee, dl, PROVIDER, TREASURY);
+        bytes memory sig = _sign(SIGNER_PK, sid, REQ1, HASH1, base, fee, base+fee, dl, PROVIDER, TREASURY);
         vm.prank(AGENT);
         vm.expectRevert(BudgetRailV2.SessionExpired.selector);
-        rail.payForRequestV2(sid, base, fee, REQ1, dl, sig);
+        rail.payForRequestV2(sid, base, fee, REQ1, HASH1, dl, sig);
 
         vm.prank(OWNER);
         vm.expectRevert(BudgetRailV2.SessionExpired.selector);
@@ -539,10 +544,10 @@ contract BudgetRailV2Test is Test {
         uint256 sid = _makeSession();
         uint256 base = 50_000; uint256 fee = 250; uint256 gross = 50_250;
         uint64 tooLateDl = uint64(block.timestamp + 2 days); // past session expiry
-        bytes memory sig = _sign(SIGNER_PK, sid, REQ1, base, fee, gross, tooLateDl, PROVIDER, TREASURY);
+        bytes memory sig = _sign(SIGNER_PK, sid, REQ1, HASH1, base, fee, gross, tooLateDl, PROVIDER, TREASURY);
         vm.prank(AGENT);
         vm.expectRevert(BudgetRailV2.QuoteDeadlineExceedsSession.selector);
-        rail.payForRequestV2(sid, base, fee, REQ1, tooLateDl, sig);
+        rail.payForRequestV2(sid, base, fee, REQ1, HASH1, tooLateDl, sig);
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -607,10 +612,10 @@ contract BudgetRailV2Test is Test {
         uint256 sid = _makeSession();
         vm.prank(OWNER); rail.closeSession(sid);
         uint256 base = 50_000; uint256 fee = 250;
-        (bytes memory sig,,) = _signBase(sid, REQ1, base, _expiry());
+        (bytes memory sig,,) = _signBase(sid, REQ1, HASH1, base, _expiry());
         vm.prank(AGENT);
         vm.expectRevert(BudgetRailV2.SessionAlreadyClosed.selector);
-        rail.payForRequestV2(sid, base, fee, REQ1, _expiry(), sig);
+        rail.payForRequestV2(sid, base, fee, REQ1, HASH1, _expiry(), sig);
     }
 
     // BUD-07: Top-up headroom = maxBudget - totalFunded (NOT maxBudget - availableBalance)
@@ -709,17 +714,17 @@ contract BudgetRailV2Test is Test {
         uint256 sid = _makeSession();
         usdc.setBlocklisted(PROVIDER, true);
         uint256 base = 50_000; uint256 fee = 250;
-        (bytes memory sig,,) = _signBase(sid, REQ1, base, _expiry());
+        (bytes memory sig,,) = _signBase(sid, REQ1, HASH1, base, _expiry());
         vm.prank(AGENT);
         vm.expectRevert();
-        rail.payForRequestV2(sid, base, fee, REQ1, _expiry(), sig);
+        rail.payForRequestV2(sid, base, fee, REQ1, HASH1, _expiry(), sig);
         // State must be unchanged
         assertEq(rail.getSession(sid).totalSpent, 0);
         assertFalse(rail.isRequestUsed(sid, REQ1));
         // Un-blocklist and retry — must succeed (requestId not consumed)
         usdc.setBlocklisted(PROVIDER, false);
         vm.prank(AGENT);
-        rail.payForRequestV2(sid, base, fee, REQ1, _expiry(), sig);
+        rail.payForRequestV2(sid, base, fee, REQ1, HASH1, _expiry(), sig);
         assertEq(usdc.balanceOf(PROVIDER), base);
     }
 
@@ -728,11 +733,11 @@ contract BudgetRailV2Test is Test {
         uint256 sid = _makeSession();
         usdc.setBlocklisted(TREASURY, true);
         uint256 base = 50_000; uint256 fee = 250;
-        (bytes memory sig,,) = _signBase(sid, REQ1, base, _expiry());
+        (bytes memory sig,,) = _signBase(sid, REQ1, HASH1, base, _expiry());
         uint256 providerBefore = usdc.balanceOf(PROVIDER);
         vm.prank(AGENT);
         vm.expectRevert();
-        rail.payForRequestV2(sid, base, fee, REQ1, _expiry(), sig);
+        rail.payForRequestV2(sid, base, fee, REQ1, HASH1, _expiry(), sig);
         // Neither C nor E should have received anything
         assertEq(usdc.balanceOf(PROVIDER), providerBefore, "C must not receive if E blocked");
         assertEq(rail.getSession(sid).totalSpent, 0, "totalSpent must be 0 after revert");
@@ -770,19 +775,19 @@ contract BudgetRailV2Test is Test {
             keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
             keccak256("BudgetRail"), keccak256("2"), block.chainid, address(rRail)
         ));
-        bytes32 sh = keccak256(abi.encode(QUOTE_V2_TYPEHASH, sid, REQ1, base, fee, gross, uint256(dl), PROVIDER, TREASURY));
+        bytes32 sh = keccak256(abi.encode(QUOTE_V2_TYPEHASH, sid, REQ1, HASH1, base, fee, gross, uint256(dl), PROVIDER, TREASURY));
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", dom, sh));
         (uint8 v, bytes32 r, bytes32 s_) = vm.sign(SIGNER_PK, digest);
         bytes memory sig = abi.encodePacked(r, s_, v);
 
         bytes memory reentrantCd = abi.encodeWithSelector(
-            BudgetRailV2.payForRequestV2.selector, sid, base, fee, REQ1, dl, sig
+            BudgetRailV2.payForRequestV2.selector, sid, base, fee, REQ1, HASH1, dl, sig
         );
         rToken.setAttack(address(rRail), reentrantCd);
 
         vm.prank(AGENT);
         vm.expectRevert();
-        rRail.payForRequestV2(sid, base, fee, REQ1, dl, sig);
+        rRail.payForRequestV2(sid, base, fee, REQ1, HASH1, dl, sig);
         assertEq(rRail.getSession(sid).totalSpent, 0, "reentrancy must leave state unchanged");
     }
 
@@ -824,11 +829,11 @@ contract BudgetRailV2Test is Test {
         uint256 sid = _makeSession();
         uint256 base = 50_000; uint256 fee = 250; uint256 gross = 50_250;
         uint64 dl = _expiry();
-        bytes memory sig = _sign(SIGNER_PK, sid, REQ1, base, fee, gross, dl, PROVIDER, TREASURY);
+        bytes memory sig = _sign(SIGNER_PK, sid, REQ1, HASH1, base, fee, gross, dl, PROVIDER, TREASURY);
 
         vm.recordLogs();
         vm.prank(AGENT);
-        rail.payForRequestV2(sid, base, fee, REQ1, dl, sig);
+        rail.payForRequestV2(sid, base, fee, REQ1, HASH1, dl, sig);
         Vm.Log[] memory logs = vm.getRecordedLogs();
 
         bool found;
@@ -838,9 +843,10 @@ contract BudgetRailV2Test is Test {
                 assertEq(uint256(logs[i].topics[1]), sid);
                 assertEq(logs[i].topics[2], REQ1);
                 assertEq(address(uint160(uint256(logs[i].topics[3]))), AGENT);
-                // non-indexed: provider, treasury, base, fee, gross, remaining
-                (address prov, address treas, uint256 b, uint256 f, uint256 g, uint256 rem) =
-                    abi.decode(logs[i].data, (address, address, uint256, uint256, uint256, uint256));
+                // non-indexed (P0 fix): requestHash, provider, treasury, base, fee, gross, remaining
+                (bytes32 rHash, address prov, address treas, uint256 b, uint256 f, uint256 g, uint256 rem) =
+                    abi.decode(logs[i].data, (bytes32, address, address, uint256, uint256, uint256, uint256));
+                assertEq(rHash, HASH1);
                 assertEq(prov,  PROVIDER);
                 assertEq(treas, TREASURY);
                 assertEq(b,     base);
@@ -885,10 +891,10 @@ contract BudgetRailV2Test is Test {
         vm.assume(rando != AGENT && rando != address(0));
         uint256 sid = _makeSession();
         uint256 base = 50_000; uint256 fee = 250;
-        (bytes memory sig,,) = _signBase(sid, REQ1, base, _expiry());
+        (bytes memory sig,,) = _signBase(sid, REQ1, HASH1, base, _expiry());
         vm.prank(rando);
         vm.expectRevert(BudgetRailV2.NotAgent.selector);
-        rail.payForRequestV2(sid, base, fee, REQ1, _expiry(), sig);
+        rail.payForRequestV2(sid, base, fee, REQ1, HASH1, _expiry(), sig);
     }
 
     // FUZZ-04: totalSpent + refunded == totalFunded (conservation)
@@ -958,9 +964,11 @@ contract BudgetRailV2Handler is CommonBase, StdCheats, StdUtils {
     uint256 public sid;
     uint256 private _nonce;
 
+    // P0 fix: requestHash added after requestId in handler typehash
     bytes32 constant QUOTE_V2_TYPEHASH = keccak256(
-        "PaymentQuoteV2(uint256 sessionId,bytes32 requestId,uint256 baseAmount,uint256 feeAmount,"
-        "uint256 grossAmount,uint256 deadline,address provider,address treasury)"
+        "PaymentQuoteV2(uint256 sessionId,bytes32 requestId,bytes32 requestHash,"
+        "uint256 baseAmount,uint256 feeAmount,uint256 grossAmount,uint256 deadline,"
+        "address provider,address treasury)"
     );
 
     constructor(BudgetRailV2 _rail, MockUSDC _usdc) {
@@ -997,11 +1005,11 @@ contract BudgetRailV2Handler is CommonBase, StdCheats, StdUtils {
         bytes32 reqId = bytes32(_nonce++);
         uint64 dl = uint64(block.timestamp + 1 hours);
         if (dl > s.expiresAt) return;
-        bytes32 sh = keccak256(abi.encode(QUOTE_V2_TYPEHASH, sid, reqId, base, fee, gross, uint256(dl), PROVIDER, TREASURY));
+        bytes32 sh = keccak256(abi.encode(QUOTE_V2_TYPEHASH, sid, reqId, keccak256(abi.encodePacked(reqId)), base, fee, gross, uint256(dl), PROVIDER, TREASURY));
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", _domainSep(), sh));
         (uint8 v, bytes32 r, bytes32 s_) = vm.sign(SIGNER_PK, digest);
         vm.prank(AGENT);
-        try rail.payForRequestV2(sid, base, fee, reqId, dl, abi.encodePacked(r, s_, v)) {} catch {}
+        try rail.payForRequestV2(sid, base, fee, reqId, keccak256(abi.encodePacked(reqId)), dl, abi.encodePacked(r, s_, v)) {} catch {}
     }
 
     function closeAndReopen() external {

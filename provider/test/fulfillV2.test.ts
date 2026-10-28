@@ -59,12 +59,14 @@ function makeConfig(): Config {
 function makeQuoteV2(overrides: Partial<{
   sessionId: string; baseAmount: string; feeAmount: string; grossAmount: string;
   deadline: string; provider: string; treasury: string; chainId: number;
-  contractAddress: string; version: string;
+  contractAddress: string; version: string; requestHash: string;
 }> = {}) {
   return {
     version:            overrides.version            ?? "2",
     sessionId:          overrides.sessionId          ?? SESSION_ID.toString(),
     requestId:          REQUEST_ID,
+    // P0 fix: requestHash is now part of the quote (SHA-256 of INPUT by default)
+    requestHash:        overrides.requestHash        ?? REQUEST_HASH,
     baseAmount:         overrides.baseAmount         ?? BASE_AMOUNT.toString(),
     feeAmount:          overrides.feeAmount          ?? FEE_AMOUNT.toString(),
     grossAmount:        overrides.grossAmount        ?? GROSS_AMOUNT.toString(),
@@ -81,20 +83,23 @@ function makeQuoteV2(overrides: Partial<{
 }
 
 const INPUT = "Hello World V2 test document.";
+// SHA-256(INPUT) — pre-computed for use in fixtures (avoids async in test setup)
+const REQUEST_HASH = "0x7949d7ea2861643f1c891255e63b1a265b58a855f3db4b611537c4fe6735cd25" as `0x${string}`;
 
 // ── ABI-encoded V2 log builders ────────────────────────────────────────────
-// PaymentSettledV2(uint256 indexed,bytes32 indexed,address indexed,address,address,uint256,uint256,uint256,uint256)
-// Indexed: sessionId(uint256), requestId(bytes32), agent(address)
-// Non-indexed: provider(address), treasury(address), baseAmount(uint256), feeAmount(uint256), grossAmount(uint256), remainingBalance(uint256)
+// PaymentSettledV2 (P0 fix): indexed = [sessionId, requestId, agent]
+//   non-indexed = [requestHash, provider, treasury, baseAmount, feeAmount, grossAmount, remainingBalance]
 
 function makePaymentSettledV2Log(overrides: Partial<{
   address: string; sessionId: bigint; requestId: string; agent: string;
+  requestHash: string;
   provider: string; treasury: string; baseAmount: bigint; feeAmount: bigint;
   grossAmount: bigint; remainingBalance: bigint;
 }> = {}) {
   const sid      = overrides.sessionId       ?? SESSION_ID;
   const reqId    = overrides.requestId       ?? REQUEST_ID;
   const agent    = overrides.agent           ?? AGENT;
+  const reqHash  = overrides.requestHash     ?? REQUEST_HASH;
   const prov     = overrides.provider        ?? PAYOUT;
   const treas    = overrides.treasury        ?? TREASURY;
   const base     = overrides.baseAmount      ?? BASE_AMOUNT;
@@ -102,9 +107,10 @@ function makePaymentSettledV2Log(overrides: Partial<{
   const gross    = overrides.grossAmount     ?? GROSS_AMOUNT;
   const rem      = overrides.remainingBalance ?? 0n;
 
+  // P0 fix: requestHash is first non-indexed field
   const data = encodeAbiParameters(
-    parseAbiParameters("address,address,uint256,uint256,uint256,uint256"),
-    [prov as `0x${string}`, treas as `0x${string}`, base, fee, gross, rem]
+    parseAbiParameters("bytes32,address,address,uint256,uint256,uint256,uint256"),
+    [reqHash as `0x${string}`, prov as `0x${string}`, treas as `0x${string}`, base, fee, gross, rem]
   );
 
   const t1 = padHex(toHex(sid),    { size: 32, dir: "left" }) as `0x${string}`;
@@ -169,6 +175,7 @@ function mockOnchain(
   blockTs: bigint | null = DEADLINE - 60n,
   settledOverrides: Partial<{
     sessionId: bigint; requestId: string; agent: string;
+    requestHash: string;
     provider: string; treasury: string;
     baseAmount: bigint; feeAmount: bigint; grossAmount: bigint; remainingBalance: bigint;
   }> = {},
@@ -180,6 +187,8 @@ function mockOnchain(
   const defaultSettled = {
     sessionId: SESSION_ID, requestId: REQUEST_ID,
     agent: AGENT.toLowerCase(), provider: PAYOUT.toLowerCase(),
+    // P0 fix: requestHash in settled event matches pre-computed SHA-256(INPUT)
+    requestHash: REQUEST_HASH.toLowerCase() as `0x${string}`,
     treasury: TREASURY.toLowerCase(),
     baseAmount: BASE_AMOUNT, feeAmount: FEE_AMOUNT, grossAmount: GROSS_AMOUNT,
     remainingBalance: 0n,
@@ -247,6 +256,8 @@ describe("decodePaymentSettledV2Log — real ABI encoding", () => {
     expect(decoded!.sessionId).toBe(SESSION_ID);
     expect(decoded!.requestId.toLowerCase()).toBe(REQUEST_ID.toLowerCase());
     expect(decoded!.agent.toLowerCase()).toBe(AGENT.toLowerCase());
+    // P0 fix: requestHash is now in the decoded event
+    expect(decoded!.requestHash.toLowerCase()).toBe(REQUEST_HASH.toLowerCase());
     expect(decoded!.provider.toLowerCase()).toBe(PAYOUT.toLowerCase());
     expect(decoded!.treasury.toLowerCase()).toBe(TREASURY.toLowerCase());
     expect(decoded!.baseAmount).toBe(BASE_AMOUNT);

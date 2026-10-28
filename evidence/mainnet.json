@@ -44,7 +44,17 @@
     },
     "verified_FEE_BPS": "N/A (V1 has no platform fee)",
     "verified_USDC_ADDRESS_onchain": null,
-    "verified_decimals_onchain": null
+    "verified_decimals_onchain": null,
+    "sourceHash_sha256": "be9ff6499e19fe240d69f47689a7acdd8dfafbfc34e1d85ab4bf6a91b056305a",
+    "sourceHash_note": "SHA-256 of contracts/BudgetRail.sol — verified Part 11 forge build",
+    "abiSelectors": {
+      "createSession": "78356880",
+      "fundSession": "a6f44bc7",
+      "payForRequest": "62f7482a",
+      "closeSession": "a3bfdf47",
+      "getSession": "402ff0db",
+      "USDC_ADDRESS": "bb09d9b7"
+    }
   },
 
   "v2Contract": {
@@ -55,7 +65,22 @@
     "deployBlock": null,
     "explorerUrl": null,
     "explorerTxUrl": null,
-    "sourceHash": null,
+    "sourceHash": "94f4e3cf9ae37d5801a3633db6557dd840ce9a017502897ec22f05bfa760c879",
+    "sourceHash_note": "SHA-256 of contracts/BudgetRailV2.sol — verified Part 11 forge build",
+    "abiSelectors": {
+      "createSession": "9a2be1f6",
+      "fundSession": "31498f93",
+      "payForRequestV2": "0814315c",
+      "closeSession": "a3bfdf47",
+      "getSession": "402ff0db",
+      "FEE_BPS": "bf333f2c",
+      "FEE_DENOMINATOR": "d73792a9",
+      "TREASURY": "2d2c5565",
+      "VERSION": "ffa1ad74",
+      "computeFee": "e1bf9c08",
+      "isRequestUsed": "a813f43c",
+      "note": "V2 createSession/fundSession/payForRequestV2 differ from V1 — never call against V1 address"
+    },
     "constructorArgs": {
       "usdcAddress": "0x3600000000000000000000000000000000000000",
       "treasury": null,
