@@ -3,11 +3,6 @@
   "outputDirectory": "dist",
   "installCommand": "bun install",
   "framework": "vite",
-  "functions": {
-    "api/*.ts":          { "runtime": "@vercel/node@3" },
-    "api/quotes/v2.ts":  { "runtime": "@vercel/node@3" },
-    "api/fulfill/v2.ts": { "runtime": "@vercel/node@3" }
-  },
   "routes": [
     { "src": "/api/rpc",        "dest": "/api/rpc" },
     { "src": "/api/health",     "dest": "/api/health" },
