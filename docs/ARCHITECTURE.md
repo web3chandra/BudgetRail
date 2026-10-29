@@ -91,6 +91,149 @@ is immutable per session. The damage is limited to the remaining session balance
 
 ---
 
+## WALLETS EXPLAINED (READ THIS FIRST)
+
+Think of BudgetRail like a vending machine for AI agents.
+There are 5 people involved. Each one has a job. None of them can do the other's job.
+
+---
+
+### Wallet A — The Owner (your user / human)
+
+**What it is:** The wallet that creates the session and puts money in.
+
+**Simple version:** The boss who loads the vending machine with coins.
+
+**What they do:**
+- Creates the session (signs `createSession`)
+- Deposits USDC into the contract (signs `approve` + `fundSession`)
+- Tops up the balance when it runs low
+- Closes the session and gets unused money back
+
+**What they CANNOT do:**
+- Cannot make payments (the contract will reject them)
+- Cannot change Provider C or Signer D once session is created
+- Cannot touch another owner's session
+
+**Key fact:** Owner A is whoever's wallet signs the `createSession` transaction.
+It is NOT inferred from a name, ENS, or cached address. It is the actual `msg.sender`.
+
+**Where the address appears:**
+- `session.owner` in the smart contract (permanent)
+- Auto-filled in the "New Budget" form when wallet is connected
+- Shown on every session page as "Owner A"
+
+---
+
+### Wallet B — The Agent (your AI / script / demo wallet)
+
+**What it is:** The wallet that is authorized to spend money from the session.
+
+**Simple version:** The vending machine's remote control — only this one button works.
+
+**What they do:**
+- Requests a signed quote from the provider API
+- Signs and sends `payForRequest` to the contract
+- Receives the API result after payment is verified
+
+**What they CANNOT do:**
+- Cannot fund or close the session (contract rejects them)
+- Cannot overspend beyond per-call cap or total budget
+- Cannot pay twice for the same request (replay protection)
+
+**Key fact:** B is set at session creation and is permanent. To change agents, close the session and create a new one.
+
+**Where the private key lives:** In `agent/agent.env` (gitignored, never committed, never in Vercel).
+
+**Testnet addresses used:**
+- `0xD995d0c31802A8D95C163f875fFefB40AB964eD6` (sh555.eth)
+- `0xC1CFDF533a6Da9a19e40cf9a8BFc1893DcFF2F7B`
+
+---
+
+### Wallet C — Provider Payout (your revenue wallet)
+
+**What it is:** The wallet that receives USDC after every successful payment.
+
+**Simple version:** The cash drawer of the vending machine — money lands here automatically.
+
+**What they do:**
+- Receives USDC on every confirmed `payForRequest`
+- Can optionally prove wallet ownership via the UI (offchain signature, no USDC)
+
+**What they CANNOT do:**
+- Cannot issue quotes (that is D's job)
+- Cannot withdraw from the session directly
+- Cannot change the session in any way
+
+**Key fact:** C is configured by the service operator in `VITE_PROVIDER_PAYOUT` and `PROVIDER_PAYOUT_ADDRESS`. Users do NOT choose it — it is the terms of using the service. It appears in every session because of the service config, NOT because accounts are mixed.
+
+**Where the private key lives:** In your hardware wallet or cold storage. The private key for C is NEVER on any server. Only the public address is needed.
+
+**Testnet address:** `0x7D76349B806148594b8075A83b2f8fb12feaA743`
+
+---
+
+### Wallet D — Quote Signer (your backend signing key)
+
+**What it is:** A keypair that the provider server uses to sign every quote.
+
+**Simple version:** The tamper-proof stamp that authorizes each vending machine transaction.
+
+**What they do:**
+- The private key lives only in `QUOTE_SIGNER_PRIVATE_KEY` (Vercel secret)
+- Signs EIP-712 quotes so the smart contract can verify them
+- Public address is stored in `session.quoteSigner` at session creation
+
+**What they CANNOT do:**
+- Cannot receive USDC (D is just a signing key, has no balance)
+- Cannot be updated in an existing session
+- Cannot authorize payments to a different provider
+
+**Key fact:** If D's private key is compromised, an attacker can issue fraudulent quotes — but cannot redirect payments away from C. Rotate D (generate a new key, update Vercel, redeploy) only in response to a security incident. Rotation breaks all existing sessions.
+
+**Where the private key lives:** Only in Vercel environment variables as `QUOTE_SIGNER_PRIVATE_KEY`. Never in `VITE_` prefixed variables, never in git, never in chat.
+
+**Testnet public address:** `0x70cd9e6a417b792ecEeA2E033BdfB8F8A8113a4C`
+
+---
+
+### Wallet E — Treasury (V2 only, your fee wallet)
+
+**What it is:** A wallet that receives the 0.5% platform fee on every V2 payment.
+
+**Simple version:** A separate tip jar that gets a small cut of every transaction.
+
+**What they do:**
+- Receives 0.5% of every V2 `payForRequest` (the fee is ADDITIVE — C still gets the full base price)
+- Example: $0.05 base → C gets $0.05, E gets $0.000250, agent pays $0.050250 total
+
+**What they CANNOT do:**
+- Cannot receive V1 payments (V1 has no treasury)
+- Cannot be changed after V2 contract is deployed (it is immutable)
+
+**Key fact:** E MUST be a different address from C on mainnet. The startup guard in `loadConfig()` blocks mainnet deployment if C == E.
+
+**Currently:** E = same address as C (testnet only, intentional for MVP). Must separate before mainnet V2.
+
+---
+
+### Summary table
+
+| Letter | Name | Job | Private key location | Must be unique from |
+|--------|------|-----|---------------------|---------------------|
+| **A** | Owner | Creates + funds session | User's own wallet (MetaMask, etc.) | — |
+| **B** | Agent | Makes payments | `agent/agent.env` (gitignored) | — |
+| **C** | Provider payout | Receives revenue | Cold storage / hardware wallet | E (on mainnet) |
+| **D** | Quote signer | Signs quotes | Vercel secret `QUOTE_SIGNER_PRIVATE_KEY` | — |
+| **E** | Treasury | Receives 0.5% V2 fee | Cold storage / hardware wallet | C (on mainnet) |
+
+**Who you (the operator) control:** C, D, and E.
+**Who your users control:** A and B.
+**What overlaps are allowed:** A=B is fine (owner-as-agent demo mode). C=E is fine on testnet. C=E is BLOCKED on mainnet.
+
+---
+
 ## Contract address and USDC address
 
 | Item | Value |
