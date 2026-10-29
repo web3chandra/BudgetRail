@@ -80,21 +80,39 @@ Wait until testnet testing is fully confirmed before starting any step here.
 
 You need 3 new wallets for mainnet. Do this on a secure offline machine or hardware wallet.
 
-**Wallet C (Provider Payout) — mainnet version**
-- Generate a new wallet. Write down the 12-word seed phrase on paper. Store it safely.
-- This wallet will accumulate all your USDC revenue. Treat it like a bank account.
-- You will use the ADDRESS only (no private key needed on any server).
+**Wallet C — Provider Payout (your revenue wallet)**
+- What it is: every USDC payment lands here automatically
+- Generate a new wallet. Write down the 12-word seed phrase on paper. Store safely.
+- You need the ADDRESS only — private key stays offline, never on any server.
+- Where the address goes in env vars:
+  - `VITE_PROVIDER_PAYOUT` → Vercel (frontend reads this to show Provider C in the UI)
+  - `PROVIDER_PAYOUT_ADDRESS` → Vercel (provider server uses this to verify payments)
+- Current testnet value: `0x7D76349B806148594b8075A83b2f8fb12feaA743`
+- Mainnet: replace both env vars above with your new mainnet C address.
 
-**Wallet D (Quote Signer) — mainnet version**
-- Generate a new 32-byte private key (use `openssl rand -hex 32` in your terminal).
-- Derive the address from the key (use `cast wallet address --private-key 0x<key>`).
-- You will put this key in Vercel as `QUOTE_SIGNER_PRIVATE_KEY`.
-- NEVER share this key. NEVER commit it. NEVER put it in any file that gets pushed.
+**Wallet D — Quote Signer (your backend signing key)**
+- What it is: a private key the server uses to sign each quote; the contract verifies it
+- Generate: `openssl rand -hex 32` → gives you a 64-char hex key
+- Derive the address: `cast wallet address --private-key 0x<your_key>`
+- You need BOTH the private key (for server) AND the address (for frontend warning).
+- Where things go in env vars:
+  - `QUOTE_SIGNER_PRIVATE_KEY` → Vercel secret (private key — never share this)
+  - `VITE_QUOTE_SIGNER` → Vercel config (public address — shows in UI for mismatch warning)
+- Current testnet address: `0x70cd9e6a417b792ecEeA2E033BdfB8F8A8113a4C`
+- Mainnet: generate a brand new key. Update both env vars. ALL existing sessions will
+  stop working (they have the old D baked in). Create fresh sessions after rotation.
 
-**Wallet E (Treasury, V2 only) — mainnet version**
-- Generate a new wallet. Write down the seed phrase. Store it separately from C.
-- This wallet receives the 0.5% fee from every V2 call.
-- Must be a DIFFERENT address from C.
+**Wallet E — Treasury (V2 fee wallet)**
+- What it is: receives the 0.5% platform fee on every V2 payment
+- Generate a new wallet. Write down the seed phrase. Store separately from C.
+- Must be a DIFFERENT address from C (code blocks C=E on mainnet at startup).
+- You need the ADDRESS only — private key stays offline.
+- Where the address goes in env vars:
+  - `VITE_TREASURY_ADDRESS` → Vercel (frontend shows it in V2 fee breakdown)
+  - `TREASURY_ADDRESS` → Vercel (provider server uses this for V2 fee verification)
+  - Also passed as constructor arg when deploying V2 contract (Step 5 below)
+- Current testnet value: same as C (intentional for testnet; blocked on mainnet)
+- Mainnet: must be a different address from C.
 
 ### STEP 2 — Fund Wallet F (deployer) with a small amount of USDC on Arc Mainnet
 
