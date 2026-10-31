@@ -226,6 +226,92 @@ Go to the official Arc grant portal. Submit with:
 
 ---
 
+## MASTER VERCEL ENV VAR REFERENCE — Everything Configurable Without Code Changes
+
+This is the single source of truth. Every operational change you will ever need to make
+can be done by updating one of these variables in Vercel → Settings → Environment Variables,
+then clicking Redeploy. No code edits required.
+
+### WALLET / ADDRESS VARIABLES (change when you rotate wallets)
+
+| Vercel Variable | Type | What it controls | Change when... |
+|-----------------|------|-----------------|----------------|
+| `VITE_PROVIDER_PAYOUT` | Config | Wallet C address shown in the UI + used by frontend | You rotate Provider C wallet |
+| `PROVIDER_PAYOUT_ADDRESS` | Config | Wallet C address used by provider server for verification | Same time as above (must match) |
+| `VITE_QUOTE_SIGNER` | Config | Wallet D public address shown in UI for mismatch warnings | You rotate Quote Signer D |
+| `QUOTE_SIGNER_PRIVATE_KEY` | **Secret** | Wallet D private key — signs every quote | You rotate Quote Signer D |
+| `VITE_TREASURY_ADDRESS` | Config | Wallet E address shown in V2 fee breakdown | You rotate Treasury E wallet |
+| `TREASURY_ADDRESS` | Config | Wallet E address used by provider server for V2 verification | Same time as above (must match) |
+
+> When you rotate Wallet D: old sessions stop working (signer mismatch). Create new sessions after rotation.
+> When you rotate Wallet C or E: only affects new sessions — old sessions already have old addresses baked in.
+
+---
+
+### CONTRACT ADDRESS VARIABLES (change when you deploy to mainnet or deploy V2)
+
+| Vercel Variable | Type | What it controls | Change when... |
+|-----------------|------|-----------------|----------------|
+| `VITE_BUDGET_RAIL_ADDRESS` | Config | V1 contract address used by frontend | You deploy V1 to mainnet |
+| `BUDGET_RAIL_TESTNET_ADDRESS` | Config | V1 contract address used by provider server | Same time as above |
+| `VITE_BUDGET_RAIL_V2_ADDRESS` | Config | V2 contract address (empty = V2 disabled in UI) | You deploy V2 to testnet or mainnet |
+| `BUDGET_RAIL_V2_ADDRESS` | Config | V2 contract address used by provider server | Same time as above |
+
+---
+
+### NETWORK / RPC VARIABLES (change when you go to mainnet)
+
+| Vercel Variable | Type | What it controls | Change when... |
+|-----------------|------|-----------------|----------------|
+| `VITE_ARC_NETWORK` | Config | `testnet` or `mainnet` — switches the whole app | Going to mainnet |
+| `PROVIDER_NETWORK` | Config | `testnet` or `mainnet` — switches provider server chain | Same time as above |
+| `VITE_ARC_TESTNET_RPC` | Config | RPC URL used by frontend | You want a different RPC provider |
+| `ARC_TESTNET_RPC_URL` | Config | RPC URL used by provider server | Same time as above |
+| `VITE_PROVIDER_API_URL` | Config | Provider API base URL (use `https://arc-budgetrail.vercel.app`) | You move the app to a different domain |
+| `ALLOWED_ORIGIN` | Config | CORS — only this origin can call `/api/quotes` and `/api/fulfill` | You move the app to a different domain |
+
+> For mainnet: change `VITE_ARC_NETWORK` → `mainnet` and `PROVIDER_NETWORK` → `mainnet`.
+> The RPC variable names stay the same — just update the values to the mainnet RPC URL.
+
+---
+
+### PRICING / LIMITS VARIABLES (change to adjust service pricing or limits — no redeploy of contract needed)
+
+| Vercel Variable | Type | Default | What it controls | Change when... |
+|-----------------|------|---------|-----------------|----------------|
+| `PRICE_PER_CALL_BASE_UNITS` | Config | `50000` ($0.05 USDC) | Price per V1 API call in 6-decimal units | You want to change the price |
+| `V2_PRICE_PER_CALL_BASE_UNITS` | Config | same as above | Price per V2 API call (if different from V1) | V2 has a different price |
+| `QUOTE_WINDOW_SECONDS` | Config | `600` (10 minutes) | How long a signed quote is valid | Quote expires too fast or too slow |
+| `MAX_INPUT_BYTES` | Config | `8192` (8 KB) | Max document size the API will accept | You want to support larger documents |
+| `RATE_LIMIT_PER_MINUTE` | Config | `10` | Max quote requests per session per minute | You want stricter or looser rate limits |
+
+> These are operator-tunable without touching any code or contract. Just update in Vercel and redeploy.
+
+---
+
+### COMPLETE CURRENT TESTNET VALUES (reference — do not copy to mainnet)
+
+```
+VITE_ARC_NETWORK=testnet
+VITE_BUDGET_RAIL_ADDRESS=0xf6a13df15ad93c2e2968e1d69c53894a923bda21
+VITE_PROVIDER_PAYOUT=<your new Wallet C address>
+VITE_QUOTE_SIGNER=<your new Wallet D address>
+VITE_TREASURY_ADDRESS=<your new Wallet E address>
+VITE_PROVIDER_API_URL=https://arc-budgetrail.vercel.app
+VITE_ARC_TESTNET_RPC=https://rpc.testnet.arc.io
+PROVIDER_NETWORK=testnet
+PROVIDER_PAYOUT_ADDRESS=<your new Wallet C address>
+QUOTE_SIGNER_PRIVATE_KEY=<secret — never share>
+ALLOWED_ORIGIN=https://arc-budgetrail.vercel.app
+ARC_TESTNET_RPC_URL=https://rpc.testnet.arc.io
+PRICE_PER_CALL_BASE_UNITS=50000
+QUOTE_WINDOW_SECONDS=600
+MAX_INPUT_BYTES=8192
+RATE_LIMIT_PER_MINUTE=10
+```
+
+---
+
 ## WHERE EACH PRIVATE KEY LIVES
 
 | Key | Where it lives | What happens if leaked |
