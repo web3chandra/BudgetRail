@@ -133,10 +133,12 @@ export function CreateBudget() {
 
   const [formErrors, setFormErrors] = useState<Partial<Record<keyof FormValues, string>>>({});
   const [showConfirm, setShowConfirm] = useState(false);
+  const defaultPriceUnits = import.meta.env.VITE_PRICE_PER_CALL
+    ? Number(import.meta.env.VITE_PRICE_PER_CALL)
+    : 50_000;
+  const [servicePriceUnits, setServicePriceUnits] = useState<number>(defaultPriceUnits);
   const [servicePrice, setServicePrice] = useState<string>(
-    import.meta.env.VITE_PRICE_PER_CALL
-      ? `$${(Number(import.meta.env.VITE_PRICE_PER_CALL) / 1_000_000).toFixed(3)} / call`
-      : "$0.05 / call"
+    `$${(defaultPriceUnits / 1_000_000).toFixed(defaultPriceUnits < 10000 ? 6 : defaultPriceUnits < 100000 ? 4 : 3)} / call`
   );
 
   // Fetch live price from provider health endpoint
@@ -145,9 +147,11 @@ export function CreateBudget() {
       .then(r => r.ok ? r.json() : null)
       .then((data: { priceBaseUnits?: string } | null) => {
         if (data?.priceBaseUnits) {
-          const dollars = (Number(data.priceBaseUnits) / 1_000_000).toFixed(
-            Number(data.priceBaseUnits) < 1000 ? 6 : Number(data.priceBaseUnits) < 10000 ? 5 : Number(data.priceBaseUnits) < 100000 ? 4 : 3
+          const units = Number(data.priceBaseUnits);
+          const dollars = (units / 1_000_000).toFixed(
+            units < 1000 ? 6 : units < 10000 ? 5 : units < 100000 ? 4 : 3
           );
+          setServicePriceUnits(units);
           setServicePrice(`$${dollars} / call`);
         }
       })
@@ -171,6 +175,14 @@ export function CreateBudget() {
     if (chainId !== CHAIN_ID) { switchChain({ chainId: CHAIN_ID }); return; }
     if (!PROVIDER_CONFIGURED) return;
     const errs = validate(form, usdcBalance);
+    // Per-call cap must be >= service price
+    const capUnits = parseUsdcUnits(form.perPaymentCap);
+    if (capUnits !== undefined && capUnits !== null && capUnits < BigInt(servicePriceUnits)) {
+      const minDollars = (servicePriceUnits / 1_000_000).toFixed(
+        servicePriceUnits < 10000 ? 6 : servicePriceUnits < 100000 ? 4 : 3
+      );
+      errs.perPaymentCap = `Must be ≥ $${minDollars} (service price)`;
+    }
     setFormErrors(errs);
     if (Object.keys(errs).length > 0) return;
     setShowConfirm(true);
@@ -418,12 +430,16 @@ export function CreateBudget() {
                     <input
                       id="cap"
                       type="text" inputMode="decimal"
+                      placeholder={`min ${(servicePriceUnits / 1_000_000).toFixed(servicePriceUnits < 10000 ? 6 : servicePriceUnits < 100000 ? 4 : 3)}`}
                       value={form.perPaymentCap}
                       onChange={e => setForm(f => ({ ...f, perPaymentCap: e.target.value }))}
                       className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-muted)]
                                  px-3 py-2.5 text-sm tabular text-[var(--ink)]
                                  focus:outline-none focus:ring-2 focus:ring-[var(--focus)]"
                     />
+                    <p className="text-xs text-[var(--subtle)] mt-1">
+                      Must be ≥ service price ({servicePrice})
+                    </p>
                     {formErrors.perPaymentCap && (
                       <p className="text-xs text-[var(--danger)] mt-1">{formErrors.perPaymentCap}</p>
                     )}
