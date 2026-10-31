@@ -31,6 +31,15 @@ BudgetRail is a full-stack programmable USDC payment-session vault for software 
 
 ## Deployed Contracts
 
+### V1 BudgetRail — Arc MAINNET (chain 5042)
+- Address: `0xca7d5977FFd54161Bb9599a9202f25b0aeFc7319`
+- Deploy tx: `0xf5ca1dbbac8f3ccf30f194adf2822837279705c604ea3a6d7c59b0cb96bae0f5`
+- Deployer: `0xb8713Ce36561E2988f3C4DE8d547BA67328cF1dd`
+- Constructor arg: USDC `0x3600000000000000000000000000000000000000`
+- Deployed: 2026-10-31
+
+
+
 | Contract | Network | Address | Deploy Tx | Block |
 |----------|---------|---------|-----------|-------|
 | BudgetRail (V1) | Arc Testnet | `0xf6a13df15ad93c2e2968e1d69c53894a923bda21` | `0xf33cb9096a45c5cc083fbee4366384f4257f509ab94fe46ec4291e775bc4a5d9` | 67,538,363 |
