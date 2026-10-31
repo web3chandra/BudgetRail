@@ -133,6 +133,26 @@ export function CreateBudget() {
 
   const [formErrors, setFormErrors] = useState<Partial<Record<keyof FormValues, string>>>({});
   const [showConfirm, setShowConfirm] = useState(false);
+  const [servicePrice, setServicePrice] = useState<string>(
+    import.meta.env.VITE_PRICE_PER_CALL
+      ? `$${(Number(import.meta.env.VITE_PRICE_PER_CALL) / 1_000_000).toFixed(3)} / call`
+      : "$0.05 / call"
+  );
+
+  // Fetch live price from provider health endpoint
+  useEffect(() => {
+    fetch("/api/health")
+      .then(r => r.ok ? r.json() : null)
+      .then((data: { priceBaseUnits?: string } | null) => {
+        if (data?.priceBaseUnits) {
+          const dollars = (Number(data.priceBaseUnits) / 1_000_000).toFixed(
+            Number(data.priceBaseUnits) < 1000 ? 6 : Number(data.priceBaseUnits) < 10000 ? 5 : Number(data.priceBaseUnits) < 100000 ? 4 : 3
+          );
+          setServicePrice(`$${dollars} / call`);
+        }
+      })
+      .catch(() => { /* keep default */ });
+  }, []);
 
   // USDC balance for validation
   const { data: usdcBalance } = useReadContract({
@@ -365,7 +385,7 @@ export function CreateBudget() {
                         : formatAddr(QUOTE_SIGNER)}
                     </span>
                     <span className="text-[var(--subtle)]">Fixed price</span>
-                    <span className="font-medium text-[var(--ink-2)]">$0.05 / call</span>
+                    <span className="font-medium text-[var(--ink-2)]">{servicePrice}</span>
                   </div>
                   <p className="text-xs text-[var(--subtle)] mt-1">
                     Provider addresses are locked at session creation and immutable thereafter.
