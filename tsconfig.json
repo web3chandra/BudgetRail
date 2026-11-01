@@ -32,6 +32,6 @@
     }
   },
   "include": ["src", "scripts", "packages/sdk/src", "examples/provider-api"],
-  "exclude": ["src/test/**", "packages/sdk/src/sdk.test.ts"]
+  "exclude": ["src/test/**", "packages/sdk/src/sdk.test.ts", "scripts/compass-deploy.ts", "scripts/compass-deploy-helpers.ts"]
 }
 

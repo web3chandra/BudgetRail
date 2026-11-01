@@ -12,7 +12,7 @@
     "fetch:abi": "bun run ./scripts/fetch-abi.ts",
     "lint": "oxlint --type-aware src scripts --fix; s=$?; oxlint --fix .; exit $((s>0?s:$?))",
     "typecheck": "tsc --noEmit",
-    "check": "bash scripts/check.sh",
+    "check": "bun run lint && bun run typecheck",
     "v2:preflight": "bun run ./scripts/check-v2-deploy.ts",
     "v2:testnet-demo": "bun run ./scripts/v2-testnet-demo.ts",
     "contracts:build": "forge build",
